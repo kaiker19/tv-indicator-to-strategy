@@ -461,17 +461,17 @@ const explainBlock = Object.keys(ex).length ? `
     </div>
   </section>` : '';
 
-// —— 指标源码（折叠 + 复制按钮）——
+// —— 指标源码（默认仅保留紧凑折叠行；来源审计说明按需显示）——
 let srcBlock = '';
 if (d.source) {
+  const showSourceAttribution = d.showSourceAttribution === true;
   const label = esc(d.sourceLabel || '完整策略源码');
   const description = esc(d.sourceDescription || '完整 Pine 策略用于审阅入场、出场、仓位、执行时点与交易成本。');
   srcBlock = `
-  <section>
-    <h2 class="sec-h src-heading">${label}</h2>
-    <p class="src-desc">${description}</p>
+  <section class="source-section">
+    ${showSourceAttribution ? `<h2 class="sec-h src-heading">${label}</h2><p class="src-desc">${description}</p>` : ''}
     <details class="src">
-      <summary><span class="src-open">展开完整源码</span><span class="src-close">收起完整源码</span><span class="src-hint">Pine</span></summary>
+      <summary><span class="src-open">${showSourceAttribution ? '展开完整源码' : '查看策略源码'}</span><span class="src-close">收起策略源码</span><span class="src-hint">Pine</span></summary>
       <div class="codewrap">
         <button class="copybtn iconbtn" type="button" title="复制代码" aria-label="复制代码" onclick="doCopy(this,'pre.code')">${copySvg}</button>
         <pre class="code">${esc(d.source)}</pre>
@@ -647,7 +647,7 @@ const optimizationDetailBlock = (() => {
     : null;
   const evaluated = numberValue(d.optimization?.evaluated) ?? numberValue(d.heatmap?.cells?.length) ?? plannedGrid;
   const summaryMeta = [dimensions ? `${dimensions} 个参数` : '', evaluated != null ? `${evaluated} 格` : ''].filter(Boolean).join(' · ');
-  return `<details class="research-detail">
+  return `<details class="research-detail" open>
     <summary><span>深度优化</span>${summaryMeta ? `<small>${esc(summaryMeta)}</small>` : ''}</summary>
     <div class="research-detail-body">${heatBlock}${optBlock}</div>
   </details>`;
@@ -715,10 +715,10 @@ const oosBlock = (() => {
   </section>`;
 })();
 
-// 组装：header → stats → (hr + section)... → hr + footer
+// 组装：header → stats → 紧邻的研究结论 → 其余长内容。
 const sections = [shotBlock, baBlock, explainBlock, srcBlock, optimizationDetailBlock, validationBlock, robustBlock, oosBlock].filter(Boolean);
 const rule = '<hr class="rule"/>';
-const body = statRow + costBlock + (verdictBlock ? rule + verdictBlock : '') + sections.map(s => rule + s).join('') + rule;
+const body = statRow + costBlock + verdictBlock + sections.map(s => rule + s).join('') + rule;
 
 const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -737,11 +737,11 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   *{ box-sizing:border-box; margin:0; padding:0; }
   body{ background:var(--bg); color:var(--z900); line-height:1.5; font-family:var(--font);
     -webkit-font-smoothing:antialiased; font-size:14px; }
-  .wrap{ max-width:672px; margin:0 auto; padding:40px 16px; }
-  hr.rule{ height:0; border:0; margin:40px 0; }
+  .wrap{ --page-pad:16px; max-width:672px; margin:0 auto; padding:40px var(--page-pad); }
+  hr.rule{ height:0; border:0; margin:34px 0; }
   section > .sec-h, section > .sec-h-row{ }
   /* header */
-  .head{ margin-bottom:32px; }
+  .head{ margin-bottom:24px; }
   .report-utility{ min-height:32px; display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:12px; }
   .pills{ display:flex; flex-wrap:wrap; gap:8px; }
   .pill-t{ padding:2px 8px; border-radius:4px; background:var(--z100); color:var(--z500);
@@ -766,7 +766,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .s-sub{ font-size:11px; color:var(--z400); margin-top:2px; font-variant-numeric:tabular-nums; }
   .costline{ margin-top:18px; font-size:11px; line-height:1.6; color:var(--z400); }
   /* verdict evidence strip */
-  .verdict-panel{ padding:18px 20px; border:1px solid var(--z100); border-radius:12px; background:var(--panel); }
+  .verdict-panel{ margin:24px calc(var(--page-pad) * -1) 0; padding:18px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
   .verdict-top{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
   .verdict-title{ max-width:520px; font-size:17px; line-height:1.45; font-weight:700; color:var(--z900); }
   .verdict-detail{ margin-top:14px; font-size:12px; line-height:1.75; color:var(--z500); }
@@ -804,7 +804,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .explain-step-label{ font-size:12px; font-weight:600; color:var(--z700); }
   .explain-step-text{ font-size:13px; line-height:1.7; color:var(--z600); }
   .seg{ padding-top:0; border-top:0; }
-  .content-group{ padding:17px 18px; border:1px solid var(--z100); border-radius:10px; background:var(--panel); }
+  .content-group{ margin-inline:calc(var(--page-pad) * -1); padding:17px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
   .content-group > .sub{ margin-bottom:14px; color:var(--z700); font-size:13px; font-weight:700; }
   .spec-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px 24px; }
   .spec-item{ min-width:0; }
@@ -854,7 +854,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .usage-scenes{ margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:20px; font-size:12px; line-height:1.65; color:var(--z600); }
   details.deep-detail{ padding:2px 0; }
   details.deep-detail > summary{ min-height:40px; padding:0 2px; color:var(--z600); font-size:12px; font-weight:650; }
-  .deep-detail-body{ margin-top:10px; padding:16px 18px; border:1px solid var(--z100); border-radius:10px; background:var(--panel); }
+  .deep-detail-body{ margin:10px calc(var(--page-pad) * -1) 0; padding:16px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
   .variable-list > div{ display:grid; grid-template-columns:72px 1fr; gap:12px; padding:6px 0; }
   .variable-list dt{ font-family:var(--mono); font-size:12px; color:var(--z700); }
   .variable-list dd{ font-size:12px; line-height:1.6; color:var(--z500); }
@@ -966,9 +966,9 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     border-radius:7px; background:var(--z900); color:#fff; font-size:11px; transform:translateX(-50%); }
   .share-status:not(:empty){ padding:8px 12px; }
   @media (max-width:640px){
-    .wrap{ padding:24px 14px 36px; }
-    hr.rule{ margin:30px 0; }
-    .head{ margin-bottom:26px; }
+    .wrap{ --page-pad:14px; padding:24px var(--page-pad) 36px; }
+    hr.rule{ margin:28px 0; }
+    .head{ margin-bottom:22px; }
     .report-utility{ align-items:center; }
     .share-report{ min-height:40px; }
     .htitle{ font-size:26px; }
@@ -977,7 +977,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     .stat + .stat{ border-left:0; }
     .s-val{ font-size:22px; }
     .costline{ margin-top:16px; }
-    .verdict-panel{ padding:16px; }
+    .verdict-panel{ margin-top:22px; padding:16px var(--page-pad); }
     .verdict-title{ font-size:16px; }
     .evidence-grid{ grid-template-columns:1fr; gap:12px; }
     .evidence-item,.evidence-item + .evidence-item{ padding:0; border-left:0; }
@@ -1003,7 +1003,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     .pills{ gap:5px; }
     .pill-t{ max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .hone{ font-size:13px; }
-    .content-group,.deep-detail-body{ padding:15px; }
+    .content-group,.deep-detail-body{ padding:15px var(--page-pad); }
     .signal-flow li{ grid-template-columns:1fr; gap:2px; }
     .flow-label{ color:var(--z700); }
     details.research-detail > summary small{ display:none; }

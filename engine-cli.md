@@ -56,6 +56,7 @@ node "$SPEC_CLI" inspect /tmp/generated-strategy.pine --spec /tmp/strategy-spec.
 node "$ENGINE" /tmp/strategy.pine \
   --symbol NASDAQ:QQQ \
   --timeframe D \
+  --chart-layout "研究专用" \
   --commission 0.15 \
   --slippage 2
 ```
@@ -67,6 +68,7 @@ node "$ENGINE" /tmp/strategy.pine \
 | `--symbol EXCHANGE:TICKER` | 单市场；不传时使用当前图表 |
 | `--symbols A,B,C` | 同一源码和输入依次验证多个市场 |
 | `--timeframe D` | 切换周期，如 `D`、`60`、`240`、`W` |
+| `--chart-layout "名称"` | 注入前精确切换本机已保存的干净布局；找不到即停止 |
 | `--input "Title=value"` | 覆盖 Pine input，可重复 |
 | `--commission 0.15` | 手续费百分数 |
 | `--slippage 2` | 滑点 ticks |
@@ -74,6 +76,8 @@ node "$ENGINE" /tmp/strategy.pine \
 | `--cleanup` | 运行后移除策略；默认保留以便用户核对 |
 
 `--input` 的键使用 Pine `input.*` 的标题，不使用 TradingView 内部字段名。若运行时更新 input 需要重新注入，引擎会失败关闭；随后应固化默认值并重新注入，不能沿用旧指标值。
+
+`--chart-layout` 是设备本地选项，公开 Skill 不预设名称。若切换时存在未保存修改，引擎停止且不会自动舍弃。若没有专用布局可省略，但最终 proof 必须只显示目标策略、Strategy Tester 和必要价格图；引擎不会为了清理截图自动删除用户已有指标。
 
 ## 轻量扫描
 
@@ -131,6 +135,8 @@ node "$ENGINE" /tmp/strategy.pine \
 - `optimization.json`：有界优化、形状和多市场验证；
 - `heatmap.json`：两轴时为完整网格；三轴及以上仅在 Top-1 固定切片具有二维邻域时生成，并记录总搜索维数与固定参数；
 - `inject_proof.png`：恢复最终状态后的证据截图。
+
+若传入 `--chart-layout`，`run_manifest.json.stages.chart_layout` 会记录请求名称、实际布局、布局 ID、加载后的 symbol 与周期，供截图来源审计。
 
 只有同时满足以下条件才可生成完成报告：
 

@@ -146,24 +146,21 @@ export async function layoutSwitch({ name }) {
   `);
   if (!result?.success) throw new Error(result?.error || 'Unknown error switching layout');
 
-  // Handle "unsaved changes" confirmation dialog
+  // Never discard unsaved chart work while switching layouts. The caller must stop
+  // and let the user decide how to handle the pending changes.
   await new Promise(r => setTimeout(r, 500));
-  const dismissed = await evaluate(`
+  const unsaved = await evaluate(`
     (function() {
-      var btns = document.querySelectorAll('button');
+      var btns = document.querySelectorAll('button, [role="button"]');
       for (var i = 0; i < btns.length; i++) {
         var text = btns[i].textContent.trim();
-        if (/open anyway|don't save|discard/i.test(text)) {
-          btns[i].click();
-          return true;
-        }
+        if (/open anyway|don't save|discard|仍然打开|直接打开|不保存|放弃更改|舍弃/i.test(text) && btns[i].offsetWidth > 0) return text;
       }
-      return false;
+      return null;
     })()
   `);
-
-  if (dismissed) await new Promise(r => setTimeout(r, 1000));
-  return { success: true, layout: result.name || name, layout_id: result.id, source: result.source, action: 'switched', unsaved_dialog_dismissed: dismissed };
+  if (unsaved) throw new Error(`CHART_LAYOUT_UNSAVED_CHANGES: ${unsaved}`);
+  return { success: true, layout: result.name || name, layout_id: result.id, source: result.source, action: 'switched', unsaved_dialog_dismissed: false };
 }
 
 export async function keyboard({ key, modifiers }) {

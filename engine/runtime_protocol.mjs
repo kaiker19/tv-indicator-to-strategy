@@ -10,6 +10,11 @@ const FAILURE_RULES = [
     recommendedAction: '在 TradingView Desktop 打开一个 chart 页面，再运行 tv_probe；不要在非图表 target 上继续。',
   },
   {
+    pattern: /CHART_LAYOUT_NOT_FOUND|CHART_LAYOUT_NOT_READY|CHART_LAYOUT_UNSAVED_CHANGES/i,
+    code: 'CHART_LAYOUT_UNAVAILABLE', severity: 'user_action', retryable: false,
+    recommendedAction: '确认本机已保存同名的干净截图布局；若存在未保存修改，先由用户决定保存或放弃，再重试。不要自动舍弃修改或模糊匹配其他布局。',
+  },
+  {
     pattern: /Could not open Pine Editor|Monaco.*not|pine.*unavailable/i,
     code: 'PINE_EDITOR_UNAVAILABLE', severity: 'retryable', retryable: true,
     recommendedAction: '运行 tv_probe 检查 pineDialog 与 Monaco；关闭遮挡弹窗后只重开 Pine 面板一次。',

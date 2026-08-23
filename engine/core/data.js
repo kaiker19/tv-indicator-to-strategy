@@ -6,6 +6,7 @@ import { hasCoreStrategyMetrics, normalizeStrategyMetrics } from '../strategy_me
 
 const MAX_OHLCV_BARS = 500;
 const MAX_HISTORY_BARS = 20_000;
+const MAX_HISTORY_SCAN_BARS = 200_000;
 const MAX_TRADES = 500;
 const CHART_API = KNOWN_PATHS.chartApi;
 const BARS_PATH = KNOWN_PATHS.mainSeriesBars;
@@ -191,19 +192,25 @@ async function readHistorySnapshot() {
   `);
 }
 
-async function readHistoryBars(maxBars) {
+async function readHistoryBars(maxBars, range = null) {
+  const filterRange = range && Number.isFinite(range.from) && Number.isFinite(range.to);
   return evaluate(`
     (function() {
       var bars = ${BARS_PATH};
       if (!bars || typeof bars.firstIndex !== 'function' || typeof bars.lastIndex !== 'function') return null;
       var total = typeof bars.size === 'function' ? bars.size() : 0;
-      if (total > ${maxBars}) return { bars: [], total_bars: total, too_many: true };
+      if (total > ${MAX_HISTORY_SCAN_BARS}) return { bars: [], total_bars: total, too_many: true };
+      var filterRange = ${filterRange ? 'true' : 'false'};
+      if (!filterRange && total > ${maxBars}) return { bars: [], total_bars: total, too_many: true };
       var result = [];
       for (var i = bars.firstIndex(); i <= bars.lastIndex(); i++) {
         var v = bars.valueAt(i);
-        if (v) result.push({ time: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] || 0 });
+        if (!v) continue;
+        if (filterRange && (v[0] < ${filterRange ? range.from : 0} || v[0] > ${filterRange ? range.to : 0})) continue;
+        result.push({ time: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] || 0 });
+        if (result.length > ${maxBars}) return { bars: [], total_bars: total, selected_bars: result.length, too_many: true };
       }
-      return { bars: result, total_bars: total };
+      return { bars: result, total_bars: total, selected_bars: result.length, filtered_range: filterRange };
     })()
   `);
 }
@@ -217,6 +224,7 @@ export async function loadOhlcvHistory({
   pollIntervalMs = 250,
   startToleranceSeconds = 86_400,
   forceRequest = false,
+  filterLoadedRange = false,
   _deps,
 } = {}) {
   const start = finiteTimestamp(from, 'from');
@@ -224,7 +232,7 @@ export async function loadOhlcvHistory({
   if (end < start) throw new TypeError('to must be greater than or equal to from.');
   const ceiling = Math.min(MAX_HISTORY_BARS, Math.max(1, Math.floor(Number(maxBars) || MAX_HISTORY_BARS)));
   const requestRange = _deps?.requestRange || requestHistoryRange;
-  const readBars = _deps?.readBars || (async () => readHistoryBars(ceiling));
+  const readBars = _deps?.readBars || (async () => readHistoryBars(ceiling, filterLoadedRange ? { from: start, to: end } : null));
   const readSnapshot = _deps?.readSnapshot || (_deps?.readBars ? readBars : readHistorySnapshot);
   const sleep = _deps?.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const requestedResolution = String(resolution || '').trim().toUpperCase().replace(/^([DWM])$/, '1$1');
@@ -265,10 +273,11 @@ export async function loadOhlcvHistory({
     const state = snapshotState(latest);
     observedState = state;
     const count = state.count;
+    const countIsSafe = filterLoadedRange ? count <= MAX_HISTORY_SCAN_BARS : count <= ceiling;
     stablePolls = state.hasCoverage
       && state.matchesResolution
       && count > 0
-      && count <= ceiling
+      && countIsSafe
       && count === previousCount
       ? stablePolls + 1
       : 0;
@@ -278,13 +287,16 @@ export async function loadOhlcvHistory({
   }
 
   if (!latest || stablePolls < 1) {
-    if (observedState.hasCoverage && observedState.matchesResolution && observedState.count > ceiling) {
+    const oversized = filterLoadedRange
+      ? observedState.count > MAX_HISTORY_SCAN_BARS
+      : observedState.count > ceiling;
+    if (observedState.hasCoverage && observedState.matchesResolution && oversized) {
       throw historyError('HISTORY_RANGE_TOO_LARGE', `Loaded ${observedState.count} bars; ceiling is ${ceiling}.`);
     }
     throw historyError('HISTORY_RANGE_UNAVAILABLE', `TradingView did not load stable ${resolution} coverage for ${start}..${end}.`);
   }
   const payload = Array.isArray(latest.bars) ? latest : await readBars();
-  if (payload?.too_many || Number(payload?.total_bars || 0) > ceiling) {
+  if (payload?.too_many || (!filterLoadedRange && Number(payload?.total_bars || 0) > ceiling)) {
     throw historyError('HISTORY_RANGE_TOO_LARGE', `Loaded ${payload?.total_bars || 0} bars; ceiling is ${ceiling}.`);
   }
   const bars = (payload?.bars || []).filter(bar => Number(bar.time) >= start && Number(bar.time) <= end);

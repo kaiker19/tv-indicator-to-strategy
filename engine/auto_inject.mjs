@@ -92,12 +92,17 @@ process.on('uncaughtException', (e) => { console.error(e); releaseLock(); proces
 // CLI 解析: <pine_file> [name] [--symbol X | --symbols A,B,C] [--timeframe Y] [--input key=value]...
 const _argv = process.argv.slice(2);
 const _pos = [];
-const flags = { symbol: null, symbols: null, timeframe: null, inputs: {}, sourceInputs: {}, keep: false, scans: [], optimize: [], objective: 'risk_adjusted', autoTune: null, oos: null, walkForward: null, episodeAudit: false, selftest: false, reuse: false, cleanup: false, budget: null, slippage: null, commission: null, commissionType: 'percent', saveName: null };
+const flags = { symbol: null, symbols: null, timeframe: null, chartLayout: null, inputs: {}, sourceInputs: {}, keep: false, scans: [], optimize: [], objective: 'risk_adjusted', autoTune: null, oos: null, walkForward: null, episodeAudit: false, selftest: false, reuse: false, cleanup: false, budget: null, slippage: null, commission: null, commissionType: 'percent', saveName: null };
 for (let i = 0; i < _argv.length; i++) {
   const a = _argv[i];
   if (a === '--symbol')         flags.symbol = _argv[++i];
   else if (a === '--symbols')   flags.symbols = (_argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
   else if (a === '--timeframe') flags.timeframe = _argv[++i];
+  else if (a === '--chart-layout') {
+    const layoutName = (_argv[++i] || '').trim();
+    if (!layoutName || layoutName.startsWith('--')) { console.error('bad --chart-layout: 期望本机已保存布局的精确名称'); process.exit(1); }
+    flags.chartLayout = layoutName;
+  }
   else if (a === '--save-name') flags.saveName = _argv[++i];
   else if (a === '--keep')      flags.keep = true;   // 兼容保留（现已是默认行为）
   else if (a === '--cleanup')   flags.cleanup = true; // 反向：跑完移除策略，留干净图表
@@ -175,7 +180,7 @@ if (flags.selftest) {
 }
 const pineFile = _pos[0];
 if (!pineFile) {
-  console.error('usage: node auto_inject.mjs <pine_file> [name] [--symbol S] [--timeframe TF] [--input key=value] [--source-input key=value]...');
+  console.error('usage: node auto_inject.mjs <pine_file> [name] [--symbol S] [--timeframe TF] [--chart-layout NAME] [--input key=value] [--source-input key=value]...');
   console.error('       node auto_inject.mjs <pine_file> --optimize Name=start..end:step [--budget N] [--oos 70]');
   console.error('       node auto_inject.mjs --selftest   端到端自检（捆绑策略 + BATS:SOXX）');
   process.exit(1);
@@ -208,6 +213,7 @@ const runManifest = buildRunManifest({
   costs: costPatch.costs,
   outputDir: OUTPUT_DIR,
 });
+if (flags.chartLayout) runManifest.intent.chartLayout = flags.chartLayout;
 let currentStage = 'startup';
 let lastAppliedInputs = {};
 let verifiedSourceInputs = {};
@@ -299,6 +305,44 @@ async function dismissModalIfAny(client) {
     return true;
   })()`);
   await sleep(600);
+}
+
+async function selectRequestedChartLayout(client) {
+  if (!flags.chartLayout) return null;
+  currentStage = 'chart_layout';
+  const requested = flags.chartLayout;
+  log(`select chart layout: ${requested}`);
+  const catalog = await ui.layoutList();
+  const target = (catalog.layouts || []).find(item => String(item.name || '').trim().toLowerCase() === requested.toLowerCase());
+  if (!target) {
+    const available = (catalog.layouts || []).map(item => item.name).filter(Boolean).slice(0, 12);
+    throw new Error(`CHART_LAYOUT_NOT_FOUND: "${requested}". Available: ${available.join(', ') || 'none'}`);
+  }
+  const switched = await ui.layoutSwitch({ name: target.name });
+  await sleep(3500);
+  await dismissModalIfAny(client);
+  const state = await chart.getState();
+  if (!state?.symbol) throw new Error(`CHART_LAYOUT_NOT_READY: "${requested}" loaded without a ready chart`);
+  completeStage(runManifest, 'chart_layout', {
+    evidence: {
+      requested,
+      actual: switched.layout || target.name,
+      layoutId: switched.layout_id || target.id || null,
+      symbol: state.symbol,
+      resolution: state.resolution || null,
+    },
+  });
+  writeRunManifest();
+  log(`  layout ready: ${switched.layout || target.name} · ${state.symbol} · ${state.resolution || '—'}`);
+  return switched;
+}
+
+async function prepareChartClient(client) {
+  await client.Runtime.enable();
+  await client.Page.enable();
+  await dismissModalIfAny(client);
+  await selectRequestedChartLayout(client);
+  return client;
 }
 
 async function dismissOnboarding(client) {
@@ -1865,31 +1909,19 @@ async function runSelfTest(client) {
 async function main() {
   log(`script=${pineFile}, name="${scriptName}", tag=${tag}`);
   if (flags.selftest) {
-    const client = await getChartClient();
-    await client.Runtime.enable();
-    await client.Page.enable();
-    await dismissModalIfAny(client);
+    const client = await prepareChartClient(await getChartClient());
     return await runSelfTest(client);
   }
   if (flags.autoTune) {
-    const client = await getChartClient();
-    await client.Runtime.enable();
-    await client.Page.enable();
-    await dismissModalIfAny(client);
+    const client = await prepareChartClient(await getChartClient());
     return await runAutoTune(client);
   }
   if (flags.optimize.length) {
-    const client = await getChartClient();
-    await client.Runtime.enable();
-    await client.Page.enable();
-    await dismissModalIfAny(client);
+    const client = await prepareChartClient(await getChartClient());
     return await runOptimize(client);
   }
   if (flags.scans.length) {
-    const client = await getChartClient();
-    await client.Runtime.enable();
-    await client.Page.enable();
-    await dismissModalIfAny(client);
+    const client = await prepareChartClient(await getChartClient());
     return await runScan(client);
   }
   // D9: 多 symbol 列表。优先 --symbols（逗号分隔），其次 --symbol，都没传则单次跑当前 symbol
@@ -1901,10 +1933,7 @@ async function main() {
   }
   log(`symbols to run: ${symbolList.map(s => s || '(current)').join(', ')}`);
 
-  const client = await getChartClient();
-  await client.Runtime.enable();
-  await client.Page.enable();
-  await dismissModalIfAny(client);
+  const client = await prepareChartClient(await getChartClient());
 
   // 第一阶段: 一次性 inject + apply + save 到库
   await switchSymbol(symbolList[0]);
