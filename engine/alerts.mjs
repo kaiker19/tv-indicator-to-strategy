@@ -476,7 +476,7 @@ async function postCreatePayload(payload) {
   `);
 }
 
-async function readRawAlert(alertId) {
+export async function readRawAlert(alertId) {
   const numericId = Number(alertId);
   if (!Number.isFinite(numericId)) throw new Error('alertId must be a finite number');
   const listed = await evaluateAsync(`

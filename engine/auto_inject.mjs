@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, existsSync, openSync, writeSync, closeSync
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { buildHeatmap } from './heatmap.mjs';
+import { buildHeatmapSlice } from './heatmap.mjs';
 import { buildEpisodeAudit } from './episode_audit.mjs';
 import { patchStrategyCosts } from './costs.mjs';
 import {
@@ -1571,10 +1571,10 @@ async function runScan(client) {
   optimizationSummary = scanSummary;
   console.log(JSON.stringify(scanSummary, null, 2));
 
-  // 恰好 2 个扫描轴 → 写热力图网格（复用本次 scan 全部结果）。其余固定输入取自 flags.inputs。
-  if (flags.scans.length === 2) {
+  // 2 个轴展示完整矩阵；3 个轴以上固定 Top-1 的其余参数，展示可审计的二维切片。
+  if (flags.scans.length >= 2 && scanSummary.best?.params) {
     try {
-      const hm = buildHeatmap(results, flags.scans, null, flags.inputs, evaluation);
+      const hm = buildHeatmapSlice(results, flags.scans, scanSummary.best.params, null, flags.inputs, evaluation);
       writeFileSync(HEATMAP_JSON, JSON.stringify(hm, null, 2));
       currentHeatmapPath = HEATMAP_JSON;
       log(`  热力图网格已写: ${HEATMAP_JSON}（${hm.cells.length} 格，metric=${hm.metric}）`);
@@ -1720,9 +1720,9 @@ async function runOptimize(client) {
   console.log(JSON.stringify(summary, null, 2));
   log(`  深度优化 JSON 已写: ${OPTIMIZATION_JSON}`);
 
-  if (flags.optimize.length === 2) {
+  if (flags.optimize.length >= 2 && summary.top[0]?.params) {
     try {
-      const hm = buildHeatmap(results, flags.optimize, null, flags.inputs, evaluationSummary);
+      const hm = buildHeatmapSlice(results, flags.optimize, summary.top[0].params, null, flags.inputs, evaluationSummary);
       writeFileSync(HEATMAP_JSON, JSON.stringify(hm, null, 2));
       currentHeatmapPath = HEATMAP_JSON;
       writeRunSummary();

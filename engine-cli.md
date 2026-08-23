@@ -129,7 +129,7 @@ node "$ENGINE" /tmp/strategy.pine \
 - `run_manifest.json`：阶段历史和诊断；
 - `scan_results.jsonl`：逐组合数据；
 - `optimization.json`：有界优化、形状和多市场验证；
-- `heatmap.json`：两个优化轴时的网格；
+- `heatmap.json`：两轴时为完整网格；三轴及以上仅在 Top-1 固定切片具有二维邻域时生成，并记录总搜索维数与固定参数；
 - `inject_proof.png`：恢复最终状态后的证据截图。
 
 只有同时满足以下条件才可生成完成报告：

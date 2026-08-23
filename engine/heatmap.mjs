@@ -27,6 +27,7 @@ function rowScore(row, effectiveObjective, bhPct) {
 
 export function buildHeatmap(rows, axes, bhPct, fixedInputs = {}, evaluation = null) {
   const [ax, ay] = axes;
+  if (!ax?.name || !ay?.name) throw new Error('heatmap requires two parameter axes');
   const xName = ax.name, yName = ay.name;
   const comparisonStatus = evaluation?.comparisonStatus || 'unverified';
   const requestedObjective = evaluation?.requestedObjective || 'alpha';
@@ -65,5 +66,27 @@ export function buildHeatmap(rows, axes, bhPct, fixedInputs = {}, evaluation = n
     best: best ? { x: best.row.params[xName], y: best.row.params[yName] } : null,
     bh_pct: bhPct ?? null,
     cells,
+  };
+}
+
+export function buildHeatmapSlice(rows, axes, bestParams = {}, bhPct = null, fixedInputs = {}, evaluation = null) {
+  if (!Array.isArray(axes) || axes.length < 2) throw new Error('heatmap slice requires at least two parameter axes');
+  const visibleAxes = axes.slice(0, 2);
+  const fixedAxes = axes.slice(2);
+  const sliceRows = fixedAxes.length
+    ? rows.filter(row => fixedAxes.every(axis => String(row.params?.[axis.name]) === String(bestParams?.[axis.name])))
+    : rows;
+  const xValues = uniqSorted(sliceRows.map(row => row.params?.[visibleAxes[0].name]).filter(value => value != null));
+  const yValues = uniqSorted(sliceRows.map(row => row.params?.[visibleAxes[1].name]).filter(value => value != null));
+  if (xValues.length < 2 || yValues.length < 2) {
+    throw new Error('Top-1 slice does not contain a two-dimensional parameter neighborhood');
+  }
+  const sliceFixed = { ...fixedInputs };
+  for (const axis of fixedAxes) sliceFixed[axis.name] = bestParams?.[axis.name];
+  return {
+    ...buildHeatmap(sliceRows, visibleAxes, bhPct, sliceFixed, evaluation),
+    searchedDimensions: axes.length,
+    sliceDimensions: 2,
+    sliceAt: fixedAxes.map(axis => ({ name: axis.name, value: bestParams?.[axis.name] })),
   };
 }

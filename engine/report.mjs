@@ -18,6 +18,20 @@ const displayPct = (v) => {
   return n == null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
 };
 
+const marketKey = (value) => {
+  const text = String(value || '').toUpperCase();
+  if (/(^|:)QQQ\b/.test(text)) return 'QQQ';
+  if (/(^|:)SPY\b/.test(text)) return 'SPY';
+  if (/510300|CSI\s*300|CSI300|沪深\s*300/.test(text)) return 'CSI300';
+  return text.replace(/^.*:/, '').trim();
+};
+
+const marketLabel = (value) => ({
+  QQQ: 'QQQ',
+  SPY: 'SPY',
+  CSI300: '沪深300',
+}[marketKey(value)] || String(value || ''));
+
 const verdictLabel = (type) => ({
   win: '通过验证',
   lose: '未跑赢基准',
@@ -28,15 +42,8 @@ const verdictLabel = (type) => ({
 
 export function buildCaseSummary(d = {}) {
   const rows = Array.isArray(d.robustness?.rows) ? d.robustness.rows.filter(Boolean) : [];
-  const standardBest = rows
-    .filter((row) => numberValue(row.alpha ?? row.alpha_pct) != null || numberValue(row.strat ?? row.strategy_pct) != null)
-    .slice()
-    .sort((a, b) => {
-      const alphaDelta = (numberValue(b.alpha ?? b.alpha_pct) ?? -Infinity) - (numberValue(a.alpha ?? a.alpha_pct) ?? -Infinity);
-      if (alphaDelta) return alphaDelta;
-      return (numberValue(b.strat ?? b.strategy_pct) ?? -Infinity) - (numberValue(a.strat ?? a.strategy_pct) ?? -Infinity);
-    })[0] || null;
-  const source = standardBest || {
+  const primaryRow = rows.find((row) => marketKey(row.symbol) === marketKey(d.symbol)) || rows[0] || null;
+  const source = primaryRow || {
     symbol: d.symbol,
     strat: d.stats?.ret,
     bh: d.stats?.bh,
@@ -56,20 +63,18 @@ export function buildCaseSummary(d = {}) {
   const researchDepth = d.researchDepth?.label
     || (d.optimization ? `${axes.length || '多'} 参数有界搜索${evaluated != null ? ` · ${evaluated} 组` : ''}` : '')
     || (rows.length >= 3 ? '完整基线 · 三市场固定参数验证' : '完整基线');
-  const scope = standardBest
-    ? ['三市场相对最好', source.symbol, d.timeframe].filter(Boolean).join(' · ')
-    : [source.symbol || d.symbol, d.timeframe].filter(Boolean).join(' · ');
+  const scope = ['回测', marketLabel(source.symbol || d.symbol), d.timeframe].filter(Boolean).join(' · ');
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     title: d.title || '指标评估',
     kind: d.card?.kind || d.type || '指标研究',
     status: d.card?.status || verdictLabel(d.verdict?.type),
     principle: d.card?.principle || d.oneLiner || d.explain?.howItWorks || '',
     scope,
     researchDepth,
-    standardBest: standardBest ? {
-      symbol: source.symbol || '',
+    primaryMarket: {
+      symbol: marketLabel(source.symbol || d.symbol),
       range: source.range || '',
       strategy,
       bh,
@@ -77,7 +82,7 @@ export function buildCaseSummary(d = {}) {
       dd,
       pf,
       trades,
-    } : null,
+    },
     metrics: [
       {
         label: '策略收益',
@@ -289,8 +294,6 @@ const costItems = d.costs ? [
 const scopeText = d.scope || [d.symbol, d.timeframe].filter(Boolean).join(' · ');
 const runLineItems = [scopeText ? `回测：${esc(scopeText)}` : '', ...costItems].filter(Boolean);
 const costBlock = runLineItems.length ? `<div class="costline">${runLineItems.join(' · ')}</div>` : '';
-const depthBlock = caseSummary.researchDepth ? `<div class="research-depth">研究深度：${esc(caseSummary.researchDepth)}</div>` : '';
-const evaluationBlock = ['incompatible', 'unverified'].includes(evaluation.status) ? `<div class="evaluation-note">${esc(evaluation.note)}</div>` : '';
 
 // —— Verdict evidence strip ——
 const verdict = d.verdict || {};
@@ -298,7 +301,6 @@ const verdictIsRisk = ['overfit', 'lose', 'caution', 'fail'].includes(verdict.ty
 const evidenceItems = Array.isArray(verdict.evidence) ? verdict.evidence : [];
 const nextAction = d.nextAction && (d.nextAction.label || d.nextAction.detail) ? d.nextAction : null;
 const nextActionHeading = nextAction && (['decision', 'stop'].includes(nextAction.kind) || /^停止/.test(nextAction.label || '')) ? '研究决策' : '下一步';
-const statusClass = (s) => s === 'win' ? 'ok' : s === 'fail' ? 'dstr' : s === 'warn' ? 'warn' : 'risk';
 const verdictBlock = (verdict.headline || verdict.detail || evidenceItems.length || nextAction) ? `
   <section class="verdict-panel ${verdictIsRisk ? 'overfit' : ''}">
     <div class="verdict-top">
@@ -309,12 +311,11 @@ const verdictBlock = (verdict.headline || verdict.detail || evidenceItems.length
       ${verdict.type ? `<span class="chip ${verdictIsRisk ? 'risk' : 'ok'}">${esc(verdictLabel(verdict.type))}</span>` : ''}
     </div>
     ${evidenceItems.length ? `<div class="evidence-grid">${evidenceItems.map(i => `
-      <div class="evidence-item">
-        <span class="chip ${statusClass(i.status)} sm">${esc(i.status === 'win' ? '赢' : i.status === 'fail' ? '失败' : i.status === 'warn' ? '提醒' : '证据')}</span>
+      <div class="evidence-item evidence-${esc(i.status || 'note')}">
         <div class="evidence-label">${esc(i.label)}</div>
         <div class="evidence-value">${esc(i.value)}</div>
       </div>`).join('')}</div>` : ''}
-    ${verdict.detail ? `<p class="verdict-detail">${esc(verdict.detail)}</p>` : ''}
+    ${verdict.detail ? `<details class="verdict-detail-fold"><summary>查看结论依据</summary><p class="verdict-detail">${esc(verdict.detail)}</p></details>` : ''}
     ${nextAction ? `<div class="next-action"><span>${nextActionHeading}</span><strong>${esc(nextAction.label || '继续研究')}</strong>${nextAction.detail ? `<p>${esc(nextAction.detail)}</p>` : ''}</div>` : ''}
   </section>` : '';
 
@@ -376,12 +377,6 @@ const structuredExplain = [
 const structuredExplainHtml = structuredExplain.length ? `<div class="explain-steps">${structuredExplain.map(([label, value]) => `
   <div class="explain-step"><div class="explain-step-label">${esc(label)}</div><div class="explain-step-text">${esc(value)}</div></div>`).join('')}</div>` : '';
 const codeEvidence = Array.isArray(d.codeEvidence) ? d.codeEvidence.filter(i => i && i.code) : [];
-const codeEvidenceHtml = codeEvidence.length ? `<details class="derive seg code-evidence"><summary><span>展开关键代码</span></summary><div class="code-evidence-body">${codeEvidence.map(i => `
-  <div class="code-evidence-item">
-    <div class="code-evidence-title">${esc(i.title || '关键逻辑')}</div>
-    <pre class="formula">${esc(i.code)}</pre>
-    ${i.explanation ? `<p class="code-evidence-note">${esc(i.explanation)}</p>` : ''}
-  </div>`).join('')}</div></details>` : '';
 const paramsList = (ex.params || []).map(p => {
   const isKey = ex.keyParam && p.name === ex.keyParam;
   return `<li><span class="pname${isKey ? ' key' : ''}">${esc(p.name)}${isKey ? '<span class="kflag">关键</span>' : ''}</span><span class="peff">${esc(p.effect)}</span></li>`;
@@ -395,15 +390,17 @@ const usageHtml = (ex.edge || keyParams.length || ex.worksWhen || ex.failsWhen) 
 const deep = ex.deep || {};
 const deepVariables = Array.isArray(deep.variables) ? deep.variables.filter(v => v && (v.symbol || v.meaning)) : [];
 const usesAdaptiveExplain = flow.length || keyParams.length || modifiers.length || Object.keys(deep).length;
-const hasDeep = deep.intuition || deepVariables.length || deep.example || deep.formula || deep.derivation || (usesAdaptiveExplain && ex.repaintNote);
+const hasDeep = deep.intuition || deepVariables.length || deep.example || deep.formula || deep.derivation
+  || ex.example || ex.formula || ex.derivation || paramsList || codeEvidence.length || ex.repaintNote;
 const deepHtml = hasDeep ? `<details class="derive seg deep-detail"><summary><span>深入理解这个指标</span></summary><div class="deep-detail-body">
   ${deep.intuition ? `<div class="detail-label">先用直觉理解</div><p class="detail-example">${esc(deep.intuition)}</p>` : ''}
   ${deepVariables.length ? `<div class="detail-label">符号说明</div><dl class="variable-list">${deepVariables.map(v => `<div><dt>${esc(v.symbol || '')}</dt><dd>${esc(v.meaning || '')}</dd></div>`).join('')}</dl>` : ''}
-  ${deep.example ? `<div class="detail-label">计算示例</div><p class="detail-example">${esc(deep.example)}</p>` : ''}
-  ${deep.formula ? `<div class="detail-label">公式</div><pre class="formula">${esc(deep.formula)}</pre>` : ''}
-  ${deep.derivation ? `<div class="detail-label">推导</div><p class="detail-example">${esc(deep.derivation)}</p>` : ''}
+  ${(deep.example || ex.example) ? `<div class="detail-label">计算示例</div><p class="detail-example">${esc(deep.example || ex.example)}</p>` : ''}
+  ${(deep.formula || ex.formula) ? `<div class="detail-label">公式</div><pre class="formula">${esc(deep.formula || ex.formula)}</pre>` : ''}
+  ${(deep.derivation || ex.derivation) ? `<div class="detail-label">推导</div><p class="detail-example">${esc(deep.derivation || ex.derivation)}</p>` : ''}
+  ${paramsList ? `<div class="detail-label">参数影响</div><ul class="params params-soft">${paramsList}</ul>` : ''}
   ${codeEvidence.length ? `<div class="detail-label">关键代码</div><div class="code-evidence-body">${codeEvidence.map(i => `<div class="code-evidence-item"><div class="code-evidence-title">${esc(i.title || '关键逻辑')}</div><pre class="formula">${esc(i.code)}</pre>${i.explanation ? `<p class="code-evidence-note">${esc(i.explanation)}</p>` : ''}</div>`).join('')}</div>` : ''}
-  ${usesAdaptiveExplain && ex.repaintNote ? `<div class="detail-label">重绘与未来函数检查</div><p class="detail-example">${esc(ex.repaintNote)}</p>` : ''}
+  ${ex.repaintNote ? `<div class="detail-label">重绘与未来函数检查</div><p class="detail-example">${esc(ex.repaintNote)}</p>` : ''}
 </div></details>` : '';
 const isOverfit = (d.verdict || {}).type === 'overfit';
 const explainPlain = [
@@ -437,19 +434,12 @@ const explainBlock = Object.keys(ex).length ? `
     <div class="vspace">
       ${ex.howItWorks ? `<p class="para">${esc(ex.howItWorks)}</p>` : ''}
       ${strategySpecHtml}
-      ${deepHtml}
       ${flowHtml}
       ${timelineHtml}
       ${structuredExplainHtml}
       ${optionalFilterHtml}
       ${usageHtml}
-      ${(ex.formula || ex.derivation || ex.example) ? `<details class="derive seg math-detail"><summary><span>展开数学原理与推导</span></summary><div class="math-detail-body">
-        ${ex.formula ? `<div class="detail-label">公式</div><pre class="formula">${esc(ex.formula)}</pre>` : ''}
-        ${ex.derivation ? `<div class="detail-label">推导</div><pre class="formula">${esc(ex.derivation)}</pre>` : ''}
-        ${ex.example ? `<div class="detail-label">计算示例</div><p class="detail-example">${esc(ex.example)}</p>` : ''}
-      </div></details>` : ''}
-      ${paramsList ? `<div class="seg"><div class="sub">参数怎么调</div><ul class="params params-soft">${paramsList}</ul></div>` : ''}
-      ${!hasDeep ? codeEvidenceHtml : ''}
+      ${deepHtml}
       ${!usesAdaptiveExplain && (ex.worksWhen || ex.failsWhen) ? `<div class="seg callouts">
         ${ex.worksWhen ? `<div class="co"><div class="co-lab">有效场景</div><div class="co-txt">${esc(ex.worksWhen)}</div></div>` : ''}
         ${ex.failsWhen ? `<div class="co"><div class="co-lab">失效场景</div><div class="co-txt muted">${esc(ex.failsWhen)}</div></div>` : ''}
@@ -501,7 +491,7 @@ function renderAlphaBars(rows, className = '') {
       ? `<div class="bar-side right"><span class="bar pos" style="width:${width.toFixed(1)}%"></span></div>`
       : `<div class="bar-side left"><span class="bar neg" style="width:${width.toFixed(1)}%"></span></div>`;
     return `<div class="bar-row">
-      <span class="bar-sym">${esc(r.symbol)}</span>
+      <span class="bar-sym">${esc(marketLabel(r.symbol))}</span>
       <div class="bar-track"><span class="bar-mid"></span>${bar}</div>
       <span class="bar-val ${sgn(alpha)}">${pct(alpha)}</span>
     </div>`;
@@ -518,7 +508,7 @@ if (d.robustness && Array.isArray(d.robustness.rows)) {
   const barsHtml = renderAlphaBars(R);
   const rows = R.map(r => `
       <tr>
-        <td class="sym">${esc(r.symbol)}${r.range ? `<small class="market-range">${esc(r.range)}</small>` : ''}</td>
+        <td class="sym">${esc(marketLabel(r.symbol))}${r.range ? `<small class="market-range">${esc(r.range)}</small>` : ''}</td>
         <td class="${sgn(stratOf(r))}">${pct(stratOf(r))}</td>
         <td class="muted">${pct(bhOf(r))}</td>
         <td class="${sgn(alphaOf(r))} big">${pct(alphaOf(r))}</td>
@@ -527,15 +517,15 @@ if (d.robustness && Array.isArray(d.robustness.rows)) {
       </tr>`).join('');
   robustBlock = `
   <section>
-    <div class="sec-h-row"><h2 class="sec-h nomb">多市场稳健性</h2><span class="beat">跑赢 ${esc(d.robustness.beatBh || '')}</span></div>
+    <div class="sec-h-row"><h2 class="sec-h nomb">同参三市场验证</h2><span class="beat">跑赢 ${esc(d.robustness.beatBh || '')}</span></div>
     <div class="barwrap">
       <div class="chart-cap">各市场超额收益 α（&gt;0 才跑赢 B&amp;H；红条 = 未跑赢）</div>
       <div class="barchart">${barsHtml}</div>
     </div>
-    <table class="grid">
+    <div class="table-scroll"><table class="grid">
       <thead><tr><th>市场</th><th>策略</th><th>B&amp;H</th><th>α</th><th>交易</th><th>结果</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>
+    </table></div>
   </section>`;
 }
 
@@ -583,10 +573,14 @@ const heatBlock = (() => {
   const fixedNote = hm.fixed?.length ? `<span class="hm-fixed">其余固定：${hm.fixed.map(f => esc(f.name + '=' + f.value)).join('、')}</span>` : '';
   const toggle = allowAlpha ? `<div class="hm-toggle" data-metric-toggle><button type="button" class="${dm === 'alpha' ? 'on' : ''}" data-m="alpha" onclick="hmToggle(this,'alpha')">α 超额</button><button type="button" class="${dm === 'ret' ? 'on' : ''}" data-m="ret" onclick="hmToggle(this,'ret')">总收益</button></div>` : '';
   const comparisonNote = hm.comparisonNote || (allowAlpha ? '' : heatEvaluation.note);
+  const dimensions = numberValue(hm.searchedDimensions) ?? numberValue(d.optimization?.axes?.length) ?? 2;
+  const matrixNote = dimensions > 2
+    ? `本次共搜索 ${dimensions} 个参数；矩阵固定其余参数，只展示 Top-1 所在的二维切片。`
+    : `本次搜索 ${dimensions} 个参数，共 ${hm.cells.length} 格。`;
   return `
-  <section>
-    <div class="sec-h-row"><h2 class="sec-h nomb">参数敏感性</h2>${toggle}</div>
-    <div class="chart-cap">当前目标格描边高亮。<b>孤立亮格 = 过拟合；成片高原 = 稳健。</b>${fixedNote}${comparisonNote ? `<br>${esc(comparisonNote)}` : ''}</div>
+  <section class="optimization-heatmap">
+    <div class="sec-h-row"><h3 class="subsection-title">参数敏感性</h3>${toggle}</div>
+    <div class="chart-cap">${esc(matrixNote)} 当前目标格描边高亮；孤立亮格要谨慎，成片区域更稳定。${fixedNote}${comparisonNote ? `<br>${esc(comparisonNote)}` : ''}</div>
     <div class="hm-wrap" onmousemove="hmMove(event)" onmouseleave="hmHide()">
       <div class="hm-panel">${svg}</div>
       <div class="hm-tip" hidden></div>
@@ -596,6 +590,19 @@ const heatBlock = (() => {
 
 // —— P2 深度优化：Top-K + 形状结论（不替代热力图，只补证据）——
 const paramsText = (params = {}) => Object.entries(params).map(([k, v]) => `${k}=${v}`).join(' · ');
+const objectiveLabel = (value) => ({
+  risk_adjusted: '收益 / 回撤',
+  net_pnl: '策略收益',
+  profit_factor: '盈亏比 PF',
+  alpha: '相对 B&H',
+  win_rate_confidence: '胜率置信下界',
+}[value] || value || '研究目标');
+const evidenceSourceLabel = (value) => ({
+  strategy_results: 'Strategy Tester',
+  scan_cell_benchmarking: '同格基准',
+  run_benchmarking: '市场复验',
+  missing: '未记录',
+}[value] || value || '未记录');
 const optBlock = (() => {
   const opt = d.optimization;
   if (!opt) return '';
@@ -611,26 +618,39 @@ const optBlock = (() => {
         <td class="muted">${pct(r.bh)}</td>
         <td class="${optEvaluation.allowCandidateAlpha ? sgn(r.alpha) : 'muted'} big">${optEvaluation.allowCandidateAlpha ? pct(r.alpha) : '未排名'}</td>
         <td class="muted">${esc(r.trades ?? '—')}</td>
-        <td><span class="source-tag">${esc(r.benchmarkSource || 'missing')}</span></td>
+        <td><span class="source-tag">${esc(evidenceSourceLabel(r.benchmarkSource))}</span></td>
       </tr>`).join('') : `
       <tr><td colspan="7" class="muted">暂无有效候选。</td></tr>`;
   return `
-  <section>
-    <div class="sec-h-row"><h2 class="sec-h nomb">深度优化 <span class="sec-sub">${esc(opt.mode || '')}</span></h2><span class="beat">预算 ${esc(opt.budget ?? '—')}</span></div>
+  <section class="optimization-ranking">
+    <div class="sec-h-row"><h3 class="subsection-title">候选排名</h3><span class="muted">预算 ${esc(opt.budget ?? '—')}</span></div>
     <div class="p2-line">
-      <span class="source-tag">${esc(opt.effectiveObjective || opt.effective_objective || opt.objective || 'objective')}</span>
-      ${opt.shape?.type ? `<span class="source-tag">${esc(opt.shape.type)}</span>` : ''}
+      <span class="p2-objective">目标：${esc(objectiveLabel(opt.effectiveObjective || opt.effective_objective || opt.objective))}</span>
       ${opt.evaluated != null ? `<span class="muted">已评估 ${esc(opt.evaluated)} 组</span>` : ''}
     </div>
     ${axisText ? `<div class="chart-cap">${esc(axisText)}</div>` : ''}
-    ${optEvaluation.allowCandidateAlpha ? '' : `<div class="p2-verdict">${esc(optEvaluation.note)}</div>`}
     ${opt.shape?.verdict ? `<div class="p2-verdict">${esc(opt.shape.verdict)}</div>` : ''}
-    <div class="sub">Top-K 候选</div>
-    <table class="grid">
+    <div class="sub">本次搜索 Top-K</div>
+    <div class="table-scroll"><table class="grid optimization-table">
       <thead><tr><th>排名</th><th>参数</th><th>策略</th><th>B&amp;H</th><th>${optEvaluation.allowCandidateAlpha ? 'α' : '基准比较'}</th><th>交易</th><th>证据源</th></tr></thead>
       <tbody>${topRows}</tbody>
-    </table>
+    </table></div>
   </section>`;
+})();
+
+const optimizationDetailBlock = (() => {
+  if (!heatBlock && !optBlock) return '';
+  const axes = Array.isArray(d.optimization?.axes) ? d.optimization.axes : [];
+  const dimensions = numberValue(d.heatmap?.searchedDimensions) ?? axes.length ?? 0;
+  const plannedGrid = axes.length && axes.every(axis => Array.isArray(axis.values) && axis.values.length)
+    ? axes.reduce((total, axis) => total * axis.values.length, 1)
+    : null;
+  const evaluated = numberValue(d.optimization?.evaluated) ?? numberValue(d.heatmap?.cells?.length) ?? plannedGrid;
+  const summaryMeta = [dimensions ? `${dimensions} 个参数` : '', evaluated != null ? `${evaluated} 格` : ''].filter(Boolean).join(' · ');
+  return `<details class="research-detail">
+    <summary><span>深度优化</span>${summaryMeta ? `<small>${esc(summaryMeta)}</small>` : ''}</summary>
+    <div class="research-detail-body">${heatBlock}${optBlock}</div>
+  </details>`;
 })();
 
 // —— P2 验证：多市场/近似验证单独展示，不覆盖 scan 证据 ——
@@ -638,6 +658,20 @@ const validationBlock = (() => {
   const v = d.validation;
   if (!v) return '';
   const rows = Array.isArray(v.rows) ? v.rows : [];
+  const robustnessRows = Array.isArray(d.robustness?.rows) ? d.robustness.rows : [];
+  const sameNumber = (a, b) => {
+    const na = numberValue(a), nb = numberValue(b);
+    return na == null && nb == null || (na != null && nb != null && Math.abs(na - nb) < 0.01);
+  };
+  const duplicatesRobustness = rows.length > 0 && rows.length === robustnessRows.length && rows.every((row) => {
+    const robust = robustnessRows.find(candidate => marketKey(candidate.symbol) === marketKey(row.symbol));
+    return robust
+      && sameNumber(row.strategy ?? row.strategy_pct ?? row.ret, robust.strat ?? robust.strategy_pct)
+      && sameNumber(row.bh ?? row.bh_pct, robust.bh ?? robust.bh_pct)
+      && sameNumber(row.alpha ?? row.alpha_pct, robust.alpha ?? robust.alpha_pct)
+      && sameNumber(row.trades, robust.trades);
+  });
+  if (duplicatesRobustness) return '';
   const barsHtml = renderAlphaBars(rows);
   const tableRows = rows.length ? rows.map(r => {
     const alpha = r.alpha ?? r.alpha_pct;
@@ -645,7 +679,7 @@ const validationBlock = (() => {
     const bh = r.bh ?? r.bh_pct;
     return `
       <tr>
-        <td class="sym">${esc(r.symbol || '')}</td>
+        <td class="sym">${esc(marketLabel(r.symbol))}</td>
         <td class="${sgn(strategy)}">${pct(strategy)}</td>
         <td class="muted">${pct(bh)}</td>
         <td class="${sgn(alpha)} big">${pct(alpha)}</td>
@@ -658,10 +692,10 @@ const validationBlock = (() => {
     <div class="sec-h-row"><h2 class="sec-h nomb">P2 验证</h2><span class="beat">跑赢 ${esc(v.beatBh || '')}</span></div>
     ${v.verdict?.label ? `<div class="p2-verdict">${esc(v.verdict.label)}${v.verdict.detail ? '：' + esc(v.verdict.detail) : ''}</div>` : ''}
     ${rows.length ? `<div class="barwrap"><div class="chart-cap">各市场超额收益 α（红条向左表示落后 B&amp;H）</div><div class="barchart validation-bars">${barsHtml}</div></div>` : ''}
-    <table class="grid">
+    <div class="table-scroll"><table class="grid">
       <thead><tr><th>市场</th><th>策略</th><th>B&amp;H</th><th>α</th><th>交易</th><th>结果</th></tr></thead>
       <tbody>${tableRows}</tbody>
-    </table>
+    </table></div>
   </section>`;
 })();
 
@@ -682,9 +716,9 @@ const oosBlock = (() => {
 })();
 
 // 组装：header → stats → (hr + section)... → hr + footer
-const sections = [shotBlock, baBlock, explainBlock, srcBlock, heatBlock, optBlock, validationBlock, oosBlock, robustBlock].filter(Boolean);
+const sections = [shotBlock, baBlock, explainBlock, srcBlock, optimizationDetailBlock, validationBlock, robustBlock, oosBlock].filter(Boolean);
 const rule = '<hr class="rule"/>';
-const body = statRow + costBlock + depthBlock + evaluationBlock + (verdictBlock ? rule + verdictBlock : '') + sections.map(s => rule + s).join('') + rule;
+const body = statRow + costBlock + (verdictBlock ? rule + verdictBlock : '') + sections.map(s => rule + s).join('') + rule;
 
 const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -697,7 +731,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     --pos:#059669; --pos2:#10b981; --posBg:#ecfdf5; --posBd:#d1fae5; --posFg:#047857;
     --neg:#ef4444; --neg2:#f87171; --negBg:#fef2f2; --negBd:#fee2e2; --negFg:#dc2626;
     --warnBg:#fffbeb; --warnBd:#fef3c7; --warnFg:#b45309;
-    --font:"Inter",-apple-system,system-ui,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+    --panel:#fdfdfd; --font:"Inter",-apple-system,system-ui,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
     --mono:"SF Mono","Cascadia Code",ui-monospace,Consolas,"PingFang SC","Microsoft YaHei",monospace;
   }
   *{ box-sizing:border-box; margin:0; padding:0; }
@@ -708,9 +742,13 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   section > .sec-h, section > .sec-h-row{ }
   /* header */
   .head{ margin-bottom:32px; }
-  .pills{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+  .report-utility{ min-height:32px; display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:12px; }
+  .pills{ display:flex; flex-wrap:wrap; gap:8px; }
   .pill-t{ padding:2px 8px; border-radius:4px; background:var(--z100); color:var(--z500);
     font-size:11px; font-weight:500; }
+  .share-report{ min-height:32px; padding:0 12px; border:1px solid var(--z200); border-radius:7px; background:#fff;
+    color:var(--z600); cursor:pointer; font-size:11px; font-weight:600; white-space:nowrap; }
+  .share-report:hover{ border-color:var(--z400); color:var(--z900); }
   .htitle{ font-size:24px; font-weight:700; letter-spacing:-.3px; line-height:1.25; color:var(--z900); }
   .hone{ margin-top:8px; font-size:14px; line-height:1.7; color:var(--z500); }
   /* section header */
@@ -727,21 +765,24 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .s-val.plain{ color:var(--z700); }
   .s-sub{ font-size:11px; color:var(--z400); margin-top:2px; font-variant-numeric:tabular-nums; }
   .costline{ margin-top:18px; font-size:11px; line-height:1.6; color:var(--z400); }
-  .research-depth{ margin-top:5px; font-size:11px; line-height:1.6; color:var(--z500); }
-  .evaluation-note{ margin-top:8px; font-size:11px; line-height:1.6; color:var(--warnFg); }
   /* verdict evidence strip */
-  .verdict-panel{ padding:18px 20px; border-radius:12px; background:var(--z50); }
+  .verdict-panel{ padding:18px 20px; border:1px solid var(--z100); border-radius:12px; background:var(--panel); }
   .verdict-top{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
-  .verdict-title{ font-size:18px; line-height:1.45; font-weight:700; color:var(--z900); }
+  .verdict-title{ max-width:520px; font-size:17px; line-height:1.45; font-weight:700; color:var(--z900); }
   .verdict-detail{ margin-top:14px; font-size:12px; line-height:1.75; color:var(--z500); }
-  .next-action{ margin-top:16px; display:grid; grid-template-columns:52px auto 1fr; gap:10px; align-items:baseline; font-size:12px; line-height:1.65; }
+  .verdict-detail-fold{ margin-top:14px; }
+  .verdict-detail-fold > summary{ width:max-content; cursor:pointer; color:var(--z500); font-size:11px; font-weight:600; }
+  .next-action{ margin-top:16px; padding-top:14px; border-top:1px solid var(--z100); display:grid; grid-template-columns:72px 1fr; gap:4px 12px; align-items:baseline; font-size:12px; line-height:1.65; }
   .next-action > span{ color:var(--z400); font-weight:600; }
   .next-action > strong{ color:var(--z700); font-weight:600; }
-  .next-action > p{ color:var(--z500); }
-  .evidence-grid{ margin-top:16px; display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
-  .evidence-item{ padding-top:2px; min-width:0; }
-  .evidence-label{ margin-top:8px; font-size:11px; color:var(--z400); font-weight:600; }
-  .evidence-value{ margin-top:4px; font-size:13px; line-height:1.5; color:var(--z700); font-weight:700; }
+  .next-action > p{ grid-column:2; color:var(--z500); }
+  .evidence-grid{ margin-top:16px; display:grid; grid-template-columns:repeat(3,1fr); gap:0; }
+  .evidence-item{ min-width:0; padding:2px 16px 2px 0; }
+  .evidence-item + .evidence-item{ padding-left:16px; border-left:1px solid var(--z100); }
+  .evidence-label{ font-size:10px; color:var(--z400); font-weight:600; }
+  .evidence-value{ margin-top:5px; font-size:12px; line-height:1.5; color:var(--z700); font-weight:700; }
+  .evidence-fail .evidence-value{ color:var(--negFg); }
+  .evidence-win .evidence-value{ color:var(--posFg); }
   /* backtest screenshot */
   .shotwrap{ border-radius:12px; overflow:hidden; border:1px solid var(--z100); }
   .shot{ width:100%; display:block; }
@@ -757,14 +798,14 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .ba-meta{ font-size:11px; color:var(--z400); margin-top:4px; }
   .ba-arrow{ align-self:center; color:var(--z300); font-size:18px; }
   /* explain */
-  .vspace > *{ margin-top:24px; } .vspace > *:first-child{ margin-top:0; }
+  .vspace > *{ margin-top:20px; } .vspace > *:first-child{ margin-top:0; }
   .explain-steps{ display:flex; flex-direction:column; gap:14px; }
   .explain-step{ display:grid; grid-template-columns:76px 1fr; gap:14px; align-items:start; }
   .explain-step-label{ font-size:12px; font-weight:600; color:var(--z700); }
   .explain-step-text{ font-size:13px; line-height:1.7; color:var(--z600); }
   .seg{ padding-top:0; border-top:0; }
-  .content-group{ padding:16px 18px; border-radius:10px; background:var(--z50); }
-  .strategy-spec > .sub{ margin-bottom:12px; }
+  .content-group{ padding:17px 18px; border:1px solid var(--z100); border-radius:10px; background:var(--panel); }
+  .content-group > .sub{ margin-bottom:14px; color:var(--z700); font-size:13px; font-weight:700; }
   .spec-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px 24px; }
   .spec-item{ min-width:0; }
   .spec-label{ font-size:11px; font-weight:600; color:var(--z400); }
@@ -774,11 +815,11 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .modifier-name{ font-size:12px; font-weight:600; color:var(--z700); margin-right:8px; }
   .modifier-rule{ font-size:12px; line-height:1.65; color:var(--z600); }
   .modifier-role{ display:block; color:var(--z400); }
-  .signal-flow{ list-style:none; display:flex; flex-direction:column; gap:10px; }
-  .signal-flow li{ display:grid; grid-template-columns:72px 1fr; gap:14px; padding:0; align-items:start; }
+  .signal-flow{ list-style:none; display:flex; flex-direction:column; gap:12px; }
+  .signal-flow li{ display:grid; grid-template-columns:76px 1fr; gap:16px; padding:0; align-items:start; }
   .signal-flow li + li{ border-top:0; }
-  .flow-label{ font-size:11px; font-weight:600; color:var(--z500); }
-  .flow-text{ font-size:13px; line-height:1.6; color:var(--z700); }
+  .flow-label{ font-size:12px; line-height:1.6; font-weight:700; color:var(--z700); }
+  .flow-text{ font-size:13px; line-height:1.65; color:var(--z600); }
   .timeline{ list-style:none; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; }
   .timeline li{ min-width:0; font-size:11px; line-height:1.45; color:var(--z600); }
   .timeline-num{ display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:var(--z100); color:var(--z600); font-size:10px; font-weight:700; margin-bottom:6px; }
@@ -811,7 +852,9 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .usage-params strong{ display:block; font-size:12px; color:var(--z600); }
   .usage-params span{ display:block; margin-top:3px; font-size:12px; line-height:1.6; color:var(--z500); }
   .usage-scenes{ margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:20px; font-size:12px; line-height:1.65; color:var(--z600); }
-  .deep-detail-body{ margin-top:12px; }
+  details.deep-detail{ padding:2px 0; }
+  details.deep-detail > summary{ min-height:40px; padding:0 2px; color:var(--z600); font-size:12px; font-weight:650; }
+  .deep-detail-body{ margin-top:10px; padding:16px 18px; border:1px solid var(--z100); border-radius:10px; background:var(--panel); }
   .variable-list > div{ display:grid; grid-template-columns:72px 1fr; gap:12px; padding:6px 0; }
   .variable-list dt{ font-family:var(--mono); font-size:12px; color:var(--z700); }
   .variable-list dd{ font-size:12px; line-height:1.6; color:var(--z500); }
@@ -853,6 +896,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .bar.pos{ background:var(--pos2); } .bar.neg{ background:var(--neg2); }
   .bar-val{ font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; width:80px; text-align:center; flex-shrink:0; }
   /* table（无卡片，两端齐平） */
+  .table-scroll{ width:100%; overflow-x:auto; overscroll-behavior-inline:contain; }
   table.grid{ width:100%; border-collapse:collapse; font-size:12px; }
   table.grid th{ text-align:right; font-size:11px; color:var(--z400); font-weight:500; padding:10px 12px; border-bottom:1px solid var(--z100); }
   table.grid th:first-child{ text-align:left; padding-left:0; } table.grid th:last-child{ padding-right:0; }
@@ -895,8 +939,20 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .hm-fixed{ margin-left:6px; color:var(--z400); }
   .hm-tip{ position:absolute; z-index:5; pointer-events:none; background:var(--z900); color:#fff; font-size:11px; line-height:1.5; padding:6px 9px; border-radius:6px; max-width:260px; transform:translate(-50%,-115%); }
   /* P2 深度优化 */
+  details.research-detail{ border:1px solid var(--z100); border-radius:12px; background:var(--panel); overflow:hidden; }
+  details.research-detail > summary{ min-height:58px; padding:0 18px; display:flex; align-items:center; justify-content:space-between; gap:16px;
+    list-style:none; cursor:pointer; color:var(--z800); font-size:15px; font-weight:700; }
+  details.research-detail > summary::-webkit-details-marker{ display:none; }
+  details.research-detail > summary::after{ content:"展开"; color:var(--z400); font-size:10px; font-weight:600; }
+  details.research-detail[open] > summary::after{ content:"收起"; }
+  details.research-detail > summary small{ margin-left:auto; color:var(--z400); font-size:11px; font-weight:500; }
+  .research-detail-body{ padding:2px 18px 20px; }
+  .research-detail-body > section{ padding-top:20px; }
+  .research-detail-body > section + section{ margin-top:24px; border-top:1px solid var(--z100); }
+  .subsection-title{ color:var(--z700); font-size:13px; font-weight:700; }
   .p2-line{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; font-size:12px; }
-  .p2-verdict{ border-top:1px solid var(--z100); padding-top:12px; margin:12px 0 16px; font-size:12px; line-height:1.7; color:var(--z600); }
+  .p2-objective{ color:var(--z600); font-weight:600; }
+  .p2-verdict{ margin:10px 0 14px; font-size:12px; line-height:1.7; color:var(--z500); }
   .p2-param{ max-width:180px; white-space:normal; line-height:1.5; }
   .source-tag{ display:inline-flex; align-items:center; padding:2px 7px; border-radius:4px; background:var(--z100); color:var(--z500); font-size:11px; font-weight:600; line-height:1.5; }
   .market-range{ display:block; margin-top:3px; color:var(--z400); font-size:9px; font-weight:500; line-height:1.4; white-space:nowrap; }
@@ -906,13 +962,62 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   /* footer */
   .foot{ color:var(--z400); font-size:11px; line-height:1.7; }
   .foot b{ color:var(--z500); font-weight:600; }
+  .share-status{ position:fixed; left:50%; bottom:20px; z-index:20; min-height:0; max-width:calc(100% - 32px); padding:0;
+    border-radius:7px; background:var(--z900); color:#fff; font-size:11px; transform:translateX(-50%); }
+  .share-status:not(:empty){ padding:8px 12px; }
+  @media (max-width:640px){
+    .wrap{ padding:24px 14px 36px; }
+    hr.rule{ margin:30px 0; }
+    .head{ margin-bottom:26px; }
+    .report-utility{ align-items:center; }
+    .share-report{ min-height:40px; }
+    .htitle{ font-size:26px; }
+    .stats{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px 14px; }
+    .stat,.stat:first-child,.stat:last-child{ padding:0; }
+    .stat + .stat{ border-left:0; }
+    .s-val{ font-size:22px; }
+    .costline{ margin-top:16px; }
+    .verdict-panel{ padding:16px; }
+    .verdict-title{ font-size:16px; }
+    .evidence-grid{ grid-template-columns:1fr; gap:12px; }
+    .evidence-item,.evidence-item + .evidence-item{ padding:0; border-left:0; }
+    .next-action{ grid-template-columns:64px 1fr; }
+    .spec-grid,.usage-params,.usage-scenes,.callouts,.oos-cols{ grid-template-columns:1fr; }
+    .modifier-row{ grid-template-columns:1fr; gap:4px; }
+    .signal-flow li{ grid-template-columns:72px 1fr; gap:12px; }
+    .timeline{ grid-template-columns:1fr; gap:12px; }
+    .timeline li{ display:grid; grid-template-columns:24px 1fr; gap:8px; align-items:start; }
+    .timeline-num{ margin-bottom:0; }
+    .sec-h-row{ align-items:flex-start; gap:12px; }
+    .bar-row{ gap:8px; }
+    .bar-sym{ width:62px; }
+    .bar-val{ width:68px; }
+    table.grid{ min-width:580px; }
+    .optimization-table{ min-width:720px; }
+    details.research-detail > summary{ min-height:56px; padding:0 14px; }
+    .research-detail-body{ padding:0 14px 16px; }
+    .hm-toggle{ flex-shrink:0; }
+    .shot-cap{ text-align:left; }
+  }
+  @media (max-width:420px){
+    .pills{ gap:5px; }
+    .pill-t{ max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .hone{ font-size:13px; }
+    .content-group,.deep-detail-body{ padding:15px; }
+    .signal-flow li{ grid-template-columns:1fr; gap:2px; }
+    .flow-label{ color:var(--z700); }
+    details.research-detail > summary small{ display:none; }
+  }
 </style></head>
 <body><div class="wrap">
 
   <header class="head">
-    <div class="pills">
-      ${d.type ? `<span class="pill-t">${esc(d.type)}</span>` : ''}
-      ${d.symbol ? `<span class="pill-t">${esc(d.symbol)}${d.timeframe ? ' · ' + esc(d.timeframe) : ''}</span>` : ''}
+    <div class="report-utility">
+      <div class="pills">
+        ${d.type ? `<span class="pill-t">${esc(d.type)}</span>` : ''}
+        ${d.symbol ? `<span class="pill-t">${esc(d.symbol)}${d.timeframe ? ' · ' + esc(d.timeframe) : ''}</span>` : ''}
+      </div>
+      <button class="share-report" type="button" onclick="shareReport(this)">分享案例</button>
     </div>
     <h1 class="htitle">${esc(d.title || '指标评估')}</h1>
     ${d.oneLiner ? `<p class="hone">${esc(d.oneLiner)}</p>` : ''}
@@ -926,6 +1031,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   </footer>
 
 </div>
+<div class="share-status" id="share-status" role="status" aria-live="polite"></div>
 <script type="application/json" id="case-summary">${caseSummaryJson}</script>
 <script>
 var CHECK_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
@@ -936,6 +1042,24 @@ function doCopy(btn, sel){
     var orig = btn.innerHTML; btn.innerHTML = CHECK_SVG; btn.classList.add('done');
     setTimeout(function(){ btn.innerHTML = orig; btn.classList.remove('done'); }, 1500);
   });
+}
+async function shareReport(btn){
+  var status = document.getElementById('share-status');
+  var original = btn.textContent;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: document.title, text: '${esc((d.oneLiner || d.title || '指标研究案例').replace(/'/g, "\\'"))}', url: location.href });
+      status.textContent = '分享面板已打开。';
+    } else {
+      await navigator.clipboard.writeText(location.href);
+      btn.textContent = '链接已复制';
+      status.textContent = '案例链接已复制。';
+    }
+  } catch (error) {
+    if (error && error.name === 'AbortError') return;
+    status.textContent = '暂时无法自动分享，请复制浏览器地址。';
+  }
+  setTimeout(function(){ btn.textContent = original; status.textContent = ''; }, 1600);
 }
 function hmToggle(btn, m){
   var sec = btn.closest('section');
