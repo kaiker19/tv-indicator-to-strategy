@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "title": "Bollinger RSI Trend Filter Strategy",
+  "summary": "下破布林下轨后，仅在 RSI 偏低且长期趋势向上时做多，回到中轨或触发风控后退出。",
+  "sourceIntent": "QQQ 日线布林均值回归，RSI 小于 35，价格在 EMA200 上方，8% 止损、16% 止盈。",
+  "family": "mean_reversion",
+  "market": {
+    "symbol": "BATS:QQQ",
+    "timeframe": "1D"
+  },
+  "execution": {
+    "timing": "bar_close",
+    "side": "long_only",
+    "pyramiding": 0,
+    "processOrdersOnClose": true
+  },
+  "costs": {
+    "commissionPct": 0.012,
+    "slippageTicks": 1
+  },
+  "position": {
+    "sizePct": 100
+  },
+  "indicators": [
+    {
+      "id": "bands",
+      "kind": "bollinger",
+      "source": "close",
+      "params": {
+        "length": 20,
+        "multiplier": 2
+      }
+    },
+    {
+      "id": "momentum",
+      "kind": "rsi",
+      "source": "close",
+      "params": {
+        "length": 14
+      }
+    },
+    {
+      "id": "trend",
+      "kind": "ema",
+      "source": "close",
+      "params": {
+        "length": 200
+      }
+    }
+  ],
+  "entry": {
+    "signal": {
+      "op": "crosses_below",
+      "left": {
+        "price": "close"
+      },
+      "right": {
+        "indicator": "bands",
+        "output": "lower"
+      }
+    },
+    "filters": [
+      {
+        "id": "rsi-low",
+        "enabled": true,
+        "condition": {
+          "op": "less_than",
+          "left": {
+            "indicator": "momentum"
+          },
+          "right": {
+            "value": 35
+          }
+        }
+      },
+      {
+        "id": "long-trend",
+        "enabled": true,
+        "condition": {
+          "op": "greater_than",
+          "left": {
+            "price": "close"
+          },
+          "right": {
+            "indicator": "trend"
+          }
+        }
+      }
+    ]
+  },
+  "exit": {
+    "signal": {
+      "op": "crosses_above",
+      "left": {
+        "price": "close"
+      },
+      "right": {
+        "indicator": "bands",
+        "output": "basis"
+      }
+    },
+    "stopLossPct": 8,
+    "takeProfitPct": 16
+  },
+  "assumptions": [
+    "布林下轨首次收盘跌破视为入场触发，不在下轨下方连续加仓。"
+  ],
+  "ambiguities": []
+}

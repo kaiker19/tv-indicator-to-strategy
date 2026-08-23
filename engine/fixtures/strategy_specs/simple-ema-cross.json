@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "title": "EMA Cross Review Strategy",
+  "summary": "快 EMA 上穿慢 EMA 做多，下穿时退出。",
+  "sourceIntent": "在 QQQ 日线上测试 EMA 20/100 金叉死叉，满仓做多，收盘执行。",
+  "family": "trend",
+  "market": {
+    "symbol": "BATS:QQQ",
+    "timeframe": "1D"
+  },
+  "execution": {
+    "timing": "bar_close",
+    "side": "long_only",
+    "pyramiding": 0,
+    "processOrdersOnClose": true
+  },
+  "costs": {
+    "commissionPct": 0.012,
+    "slippageTicks": 1
+  },
+  "position": {
+    "sizePct": 100
+  },
+  "indicators": [
+    {
+      "id": "fast",
+      "kind": "ema",
+      "source": "close",
+      "params": {
+        "length": 20
+      }
+    },
+    {
+      "id": "slow",
+      "kind": "ema",
+      "source": "close",
+      "params": {
+        "length": 100
+      }
+    }
+  ],
+  "entry": {
+    "signal": {
+      "op": "crosses_above",
+      "left": {
+        "indicator": "fast"
+      },
+      "right": {
+        "indicator": "slow"
+      }
+    },
+    "filters": []
+  },
+  "exit": {
+    "signal": {
+      "op": "crosses_below",
+      "left": {
+        "indicator": "fast"
+      },
+      "right": {
+        "indicator": "slow"
+      }
+    }
+  },
+  "assumptions": [],
+  "ambiguities": []
+}

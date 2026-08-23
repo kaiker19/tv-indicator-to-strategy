@@ -1,0 +1,30 @@
+//@version=6
+strategy("Smoke MACD Strategy", overlay=false, default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.1)
+
+fastLen = input.int(12, "Fast Length")
+slowLen = input.int(26, "Slow Length")
+signalLen = input.int(9, "Signal Length")
+tradeDirection = input.string("Long Only", "Direction", options=["Long Only", "Short Only", "Both"])
+
+[macdLine, signalLine, hist] = ta.macd(close, fastLen, slowLen, signalLen)
+
+longEntry = ta.crossover(macdLine, signalLine)
+longExit = ta.crossunder(macdLine, signalLine)
+shortEntry = ta.crossunder(macdLine, signalLine)
+shortExit = ta.crossover(macdLine, signalLine)
+
+if (tradeDirection != "Short Only")
+    if (longEntry)
+        strategy.entry("Long", strategy.long)
+    if (longExit)
+        strategy.close("Long")
+
+if (tradeDirection != "Long Only")
+    if (shortEntry)
+        strategy.entry("Short", strategy.short)
+    if (shortExit)
+        strategy.close("Short")
+
+plot(macdLine, "MACD", color=color.blue)
+plot(signalLine, "Signal", color=color.orange)
+plot(hist, "Histogram", color=color.gray, style=plot.style_columns)

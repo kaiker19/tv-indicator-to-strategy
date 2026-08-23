@@ -1,0 +1,32 @@
+//@version=6
+strategy("Smoke Bollinger Strategy", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.1)
+
+length = input.int(20, "Length")
+mult = input.float(2.0, "Multiplier")
+tradeDirection = input.string("Long Only", "Direction", options=["Long Only", "Short Only", "Both"])
+
+basis = ta.sma(close, length)
+dev = mult * ta.stdev(close, length)
+upper = basis + dev
+lower = basis - dev
+
+longEntry = ta.crossover(close, lower)
+longExit = ta.crossover(close, basis)
+shortEntry = ta.crossunder(close, upper)
+shortExit = ta.crossunder(close, basis)
+
+if (tradeDirection != "Short Only")
+    if (longEntry)
+        strategy.entry("Long", strategy.long)
+    if (longExit)
+        strategy.close("Long")
+
+if (tradeDirection != "Long Only")
+    if (shortEntry)
+        strategy.entry("Short", strategy.short)
+    if (shortExit)
+        strategy.close("Short")
+
+plot(basis, "Basis", color=color.blue)
+plot(upper, "Upper", color=color.gray)
+plot(lower, "Lower", color=color.gray)

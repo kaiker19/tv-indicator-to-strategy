@@ -1,0 +1,24 @@
+{
+  "name": "tv-indicator-to-strategy-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TradingView 指标转策略 + 自动注入回测 + 参数调优引擎（CDP 驱动 TV Desktop）",
+  "bin": {
+    "tv-inject": "./auto_inject.mjs",
+    "tv-probe": "./tv_probe.mjs",
+    "tv-alert": "./alerts.mjs",
+    "tv-cleanup": "./cleanup_ai_scripts.mjs",
+    "tv-profile": "./strategy_profile_cli.mjs",
+    "tv-strategy-spec": "./strategy_spec_cli.mjs"
+  },
+  "scripts": {
+    "check": "node check.mjs",
+    "test": "node --test",
+    "selftest": "node auto_inject.mjs --selftest"
+  },
+  "dependencies": {
+    "chrome-remote-interface": "^0.33.2"
+  },
+  "engines": { "node": ">=18" }
+}

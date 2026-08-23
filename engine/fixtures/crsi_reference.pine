@@ -1,0 +1,50 @@
+//@version=6
+strategy("Connors RSI Strategy", overlay=false, default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.1)
+
+// --- 1. 参数 ---
+lenrsi    = input.int(3,   "RSI Length")
+lenupdown = input.int(2,   "UpDown Length")
+lenroc    = input.int(100, "ROC Length")
+
+overbought     = input.int(70, "Overbought")
+oversold       = input.int(30, "Oversold")
+tradeDirection = input.string("Long Only", "Direction", options=["Long Only", "Short Only", "Both"])
+
+// --- 2. CRSI 计算 ---
+updown(s) =>
+    isEqual   = s == s[1]
+    isGrowing = s > s[1]
+    ud = 0.0
+    ud := isEqual ? 0 : isGrowing ? (nz(ud[1]) <= 0 ? 1 : nz(ud[1]) + 1) : (nz(ud[1]) >= 0 ? -1 : nz(ud[1]) - 1)
+    ud
+
+src         = close
+rsi         = ta.rsi(src, lenrsi)
+updownrsi   = ta.rsi(updown(src), lenupdown)
+percentrank = ta.percentrank(ta.roc(src, 1), lenroc)
+crsi        = math.avg(rsi, updownrsi, percentrank)
+
+// --- 3. 信号 ---
+longEntry  = ta.crossover(crsi, oversold)
+longExit   = ta.crossunder(crsi, overbought)
+shortEntry = ta.crossunder(crsi, overbought)
+shortExit  = ta.crossover(crsi, oversold)
+
+// --- 4. 执行策略 ---
+if (tradeDirection != "Short Only")
+    if (longEntry)
+        strategy.entry("Long", strategy.long)
+    if (longExit)
+        strategy.close("Long")
+
+if (tradeDirection != "Long Only")
+    if (shortEntry)
+        strategy.entry("Short", strategy.short)
+    if (shortExit)
+        strategy.close("Short")
+
+// --- 5. 可视化 ---
+plot(crsi, "CRSI", color=color.blue)
+hline(overbought, "Upper", color=color.gray)
+hline(50,         "Mid",   color=color.new(color.gray, 50))
+hline(oversold,   "Lower", color=color.gray)

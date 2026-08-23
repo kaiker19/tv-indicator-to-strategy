@@ -1,0 +1,29 @@
+//@version=6
+strategy("Standard Moving Average Cross Strategy", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.1)
+
+fastLength = input.int(20, "Fast Length")
+slowLength = input.int(100, "Slow Length")
+tradeDirection = input.string("Long Only", "Direction", options=["Long Only", "Short Only", "Both"])
+
+fast = ta.ema(close, fastLength)
+slow = ta.ema(close, slowLength)
+
+longEntry = ta.crossover(fast, slow)
+longExit = ta.crossunder(fast, slow)
+shortEntry = ta.crossunder(fast, slow)
+shortExit = ta.crossover(fast, slow)
+
+if (tradeDirection != "Short Only")
+    if (longEntry)
+        strategy.entry("Long", strategy.long)
+    if (longExit)
+        strategy.close("Long")
+
+if (tradeDirection != "Long Only")
+    if (shortEntry)
+        strategy.entry("Short", strategy.short)
+    if (shortExit)
+        strategy.close("Short")
+
+plot(fast, "Fast EMA", color=color.blue)
+plot(slow, "Slow EMA", color=color.orange)

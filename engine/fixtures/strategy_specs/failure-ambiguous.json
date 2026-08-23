@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "title": "Ambiguous RSI Idea",
+  "summary": "RSI 超卖时考虑做多，但市场和退出规则尚未指定。",
+  "sourceIntent": "RSI 超卖就买。",
+  "family": "mean_reversion",
+  "market": {
+    "symbol": null,
+    "timeframe": "1D"
+  },
+  "execution": {
+    "timing": "bar_close",
+    "side": "long_only",
+    "pyramiding": 0,
+    "processOrdersOnClose": true
+  },
+  "costs": {
+    "commissionPct": 0.012,
+    "slippageTicks": 1
+  },
+  "position": {
+    "sizePct": 100
+  },
+  "indicators": [
+    {
+      "id": "momentum",
+      "kind": "rsi",
+      "source": "close",
+      "params": {
+        "length": 14
+      }
+    }
+  ],
+  "entry": {
+    "signal": {
+      "op": "less_than",
+      "left": {
+        "indicator": "momentum"
+      },
+      "right": {
+        "value": 30
+      }
+    },
+    "filters": []
+  },
+  "exit": null,
+  "assumptions": [],
+  "ambiguities": [
+    {
+      "field": "market.symbol",
+      "question": "要在哪个标的上研究？",
+      "choices": [
+        "BATS:QQQ",
+        "SSE:510300"
+      ],
+      "severity": "blocking"
+    },
+    {
+      "field": "exit.signal",
+      "question": "RSI 策略在什么条件下退出？",
+      "choices": [
+        "RSI 上穿 50",
+        "固定止损止盈"
+      ],
+      "severity": "blocking"
+    }
+  ]
+}

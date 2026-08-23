@@ -1,0 +1,52 @@
+{
+  "status": "partial",
+  "title": "示例趋势指标",
+  "type": "趋势跟踪",
+  "card": { "kind": "字段结构示例", "status": "等待真实回测" },
+  "symbol": "EXAMPLE:ASSET",
+  "timeframe": "日线 D",
+  "oneLiner": "本文件只演示报告字段；发布包不携带历史案例或绩效数据。",
+  "verdict": {
+    "type": "caution",
+    "headline": "等待 TradingView 证据",
+    "detail": "请用当前指标、当前市场和当前 Strategy Tester 结果替换本示例。"
+  },
+  "nextAction": {
+    "kind": "validate",
+    "label": "建立真实基线",
+    "detail": "先确认源码身份、Strategy Spec、成本和回测区间。"
+  },
+  "researchDepth": { "label": "结构示例 · 未执行回测" },
+  "costs": { "commission": "按用户口径填写", "slippage": "按用户口径填写" },
+  "strategySpec": {
+    "entry": "示例：收盘确认后由主信号触发",
+    "exit": "示例：主信号失效后离场",
+    "position": "由用户确认",
+    "execution": "由用户确认",
+    "costs": "由用户确认",
+    "exclusions": "不得从示例补猜",
+    "modifiers": []
+  },
+  "explain": {
+    "howItWorks": "说明指标读取什么、怎样形成候选、何时确认和何时失效。",
+    "flow": [
+      { "label": "观察", "text": "读取指标实际使用的价格与状态。" },
+      { "label": "计算", "text": "按源码计算主信号。" },
+      { "label": "确认", "text": "按 Strategy Spec 确认信号。" },
+      { "label": "执行", "text": "在约定时点提交订单。" }
+    ],
+    "edge": "写明策略押注的市场行为，并说明它可能不成立的环境。",
+    "keyParams": [
+      { "name": "核心参数", "effect": "说明调大和调小分别改变什么。" }
+    ],
+    "worksWhen": "写明适用市场状态。",
+    "failsWhen": "写明容易失效的市场状态。",
+    "repaint": "unverified",
+    "repaintNote": "完成源码审计后再填写。"
+  },
+  "source": "//@version=6\nstrategy(\"Example Strategy\", overlay=true, pyramiding=0, process_orders_on_close=true)\nlength = input.int(20, \"Length\")\nbasis = ta.ema(close, length)\nif (barstate.isconfirmed and ta.crossover(close, basis))\n    strategy.entry(\"Long\", strategy.long)\nif (barstate.isconfirmed and ta.crossunder(close, basis))\n    strategy.close(\"Long\")",
+  "sourceLabel": "字段示例源码",
+  "out": "/tmp/report.html",
+  "cardOut": "/tmp/share_card.html",
+  "cardPngOut": "/tmp/share_card.png"
+}
