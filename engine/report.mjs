@@ -45,14 +45,24 @@ const verdictLabel = (type) => ({
 export function buildCaseSummary(d = {}) {
   const rows = Array.isArray(d.robustness?.rows) ? d.robustness.rows.filter(Boolean) : [];
   const primaryRow = rows.find((row) => marketKey(row.symbol) === marketKey(d.symbol)) || rows[0] || null;
-  const source = primaryRow || {
+  const reportStats = d.stats || {};
+  const primaryMatchesReport = primaryRow && marketKey(primaryRow.symbol) === marketKey(d.symbol);
+  const source = primaryRow ? {
+    ...primaryRow,
+    strat: primaryRow.strat ?? primaryRow.strategy_pct ?? (primaryMatchesReport ? reportStats.ret : null),
+    bh: primaryRow.bh ?? primaryRow.bh_pct ?? (primaryMatchesReport ? reportStats.bh : null),
+    alpha: primaryRow.alpha ?? primaryRow.alpha_pct ?? (primaryMatchesReport ? reportStats.alpha : null),
+    dd: primaryRow.dd ?? primaryRow.drawdown ?? primaryRow.max_drawdown ?? (primaryMatchesReport ? reportStats.dd : null),
+    pf: primaryRow.pf ?? primaryRow.profit_factor ?? (primaryMatchesReport ? reportStats.pf : null),
+    trades: primaryRow.trades ?? (primaryMatchesReport ? reportStats.trades : null),
+  } : {
     symbol: d.symbol,
-    strat: d.stats?.ret,
-    bh: d.stats?.bh,
-    alpha: d.stats?.alpha,
-    dd: d.stats?.dd,
-    pf: d.stats?.pf,
-    trades: d.stats?.trades,
+    strat: reportStats.ret,
+    bh: reportStats.bh,
+    alpha: reportStats.alpha,
+    dd: reportStats.dd,
+    pf: reportStats.pf,
+    trades: reportStats.trades,
   };
   const strategy = numberValue(source.strat ?? source.strategy_pct);
   const bh = numberValue(source.bh ?? source.bh_pct);
