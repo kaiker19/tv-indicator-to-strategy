@@ -3,8 +3,10 @@
 // 纯数据→HTML，不碰 TV/CDP。数据契约（v0 shape）见 engine-cli.md「生成可视化报告」。
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { pathToFileURL } from 'url';
+
+export const REPORT_TEMPLATE_VERSION = 1;
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 
@@ -67,6 +69,7 @@ export function buildCaseSummary(d = {}) {
 
   return {
     schemaVersion: 2,
+    reportTemplateVersion: REPORT_TEMPLATE_VERSION,
     title: d.title || '指标评估',
     kind: d.card?.kind || d.type || '指标研究',
     status: d.card?.status || verdictLabel(d.verdict?.type),
@@ -174,6 +177,26 @@ export function validateData(d) {
     if (!h.xParam?.name || !Array.isArray(h.xParam?.values)) errors.push('heatmap.xParam 需含 name 与 values[]');
     if (!h.yParam?.name || !Array.isArray(h.yParam?.values)) errors.push('heatmap.yParam 需含 name 与 values[]');
   }
+  const deep = d.explain?.deep;
+  const equations = Array.isArray(deep?.equations) ? deep.equations.filter(Boolean) : [];
+  if (equations.length) {
+    const variables = Array.isArray(deep?.variables) ? deep.variables.filter(Boolean) : [];
+    const definedSymbols = new Set(variables.map(item => String(item?.symbol || '').trim()).filter(Boolean));
+    if (!variables.length) errors.push('explain.deep.equations 存在时必须提供 variables[]，定义公式中的全部符号');
+    if (typeof deep?.example !== 'string' || !deep.example.trim()) {
+      errors.push('explain.deep.equations 存在时必须提供 example，用 3–6 个简化数值走一遍计算');
+    }
+    equations.forEach((equation, index) => {
+      if (typeof equation?.label !== 'string' || !equation.label.trim()) errors.push(`explain.deep.equations[${index}].label 不能为空`);
+      if (typeof equation?.expression !== 'string' || !equation.expression.trim()) errors.push(`explain.deep.equations[${index}].expression 不能为空`);
+      if (!Array.isArray(equation?.symbols) || !equation.symbols.length) {
+        errors.push(`explain.deep.equations[${index}].symbols 必须列出本式使用的符号`);
+      } else {
+        const missing = equation.symbols.map(symbol => String(symbol).trim()).filter(symbol => symbol && !definedSymbols.has(symbol));
+        if (missing.length) errors.push(`explain.deep.equations[${index}] 存在未定义符号: ${missing.join(', ')}`);
+      }
+    });
+  }
   if (d.screenshot && !existsSync(d.screenshot)) warnings.push(`screenshot 路径不存在，将跳过截图: ${d.screenshot}`);
   return { errors, warnings };
 }
@@ -199,16 +222,20 @@ export function buildShareCard(d) {
     d.costs.commission ? `手续费 ${esc(d.costs.commission)}` : '',
     d.costs.slippage ? `滑点 ${esc(d.costs.slippage)}` : '',
   ].filter(Boolean) : [];
+  const researchDepth = typeof d.researchDepth === 'string' ? d.researchDepth : d.researchDepth?.label;
   const trustItems = [
     d.robustness?.beatBh ? { label: '多市场验证', value: `跑赢 ${esc(d.robustness.beatBh)}` } : null,
+    researchDepth ? { label: '研究深度', value: esc(researchDepth) } : null,
     st.trades != null ? { label: '样本量', value: `${esc(st.trades)} 笔交易` } : null,
     costItems.length ? { label: '回测成本', value: costItems.join(' · ') } : null,
     { label: '诚实结论', value: evaluation.status === 'comparable' ? (verdict.type === 'lose' ? '未证明优于持有' : isRisk ? '高风险，先别实盘' : '仍需样本外验证') : evaluation.trustText },
   ].filter(Boolean);
   const trustHtml = trustItems.map(i => `<div class="trust-item"><div class="trust-lab">${esc(i.label)}</div><div class="trust-val">${i.value}</div></div>`).join('');
   const principle = d.sharePrinciple || '';
+  const shareOrigin = d.shareUrl ? String(d.shareUrl).replace(/^https?:\/\//i, '') : '由 tv-indicator-to-strategy 生成';
 
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
+<meta name="tv-indicator-report-template" content="${REPORT_TEMPLATE_VERSION}"/>
 <meta name="viewport" content="width=1080, initial-scale=1"/>
 <title>${esc(d.title || '策略分享卡')}</title>
 <style>
@@ -223,6 +250,7 @@ export function buildShareCard(d) {
   .benchmark-label{ color:var(--z400); font-size:19px; font-weight:700; line-height:1.3; }
   .benchmark-value{ margin-top:6px; font-size:28px; font-weight:800; line-height:1.2; white-space:nowrap; }
   h1{ max-width:740px; font-size:58px; line-height:1.1; letter-spacing:0; color:var(--z900); }
+  .share-scope{ margin-top:-24px; color:var(--z400); font-size:21px; font-weight:650; line-height:1.4; }
   .headline{ font-size:34px; line-height:1.35; font-weight:700; color:var(--z800); }
   .one{ font-size:28px; line-height:1.55; color:var(--z600); }
   .principle-lab{ color:var(--z400); font-size:20px; font-weight:700; margin-bottom:8px; }
@@ -243,6 +271,7 @@ export function buildShareCard(d) {
     <h1>${esc(d.title || '策略回测')}</h1>
     <div class="benchmark-verdict ${beatBenchmark ? 'ok' : 'risk'}"><div class="benchmark-label">基准结论</div><div class="benchmark-value">${evaluation.benchmarkText}</div></div>
   </div>
+  ${d.shareScope ? `<div class="share-scope">${esc(d.shareScope)}</div>` : ''}
   ${verdict.headline ? `<div class="headline">${esc(verdict.headline)}</div>` : ''}
   ${principle ? `<div class="principle"><div class="principle-lab">原理</div><div class="principle-text">${esc(principle)}</div></div>` : d.oneLiner ? `<div class="one">${esc(d.oneLiner)}</div>` : ''}
   <div class="stats">
@@ -253,7 +282,7 @@ export function buildShareCard(d) {
   </div>
   <div class="trust-grid">${trustHtml}</div>
   ${verdict.detail ? `<div class="risk-note">${esc(verdict.detail)}</div>` : ''}
-  <div class="foot"><span>由 tv-indicator-to-strategy 生成</span><span>非投资建议</span></div>
+  <div class="foot"><span>${esc(shareOrigin)}</span><span>非投资建议</span></div>
 </div></body></html>`;
 }
 
@@ -310,11 +339,12 @@ const verdictBlock = (verdict.headline || verdict.detail || evidenceItems.length
       </div>
       ${verdict.type ? `<span class="chip ${verdictIsRisk ? 'risk' : 'ok'}">${esc(verdictLabel(verdict.type))}</span>` : ''}
     </div>
-    ${evidenceItems.length ? `<div class="evidence-grid">${evidenceItems.map(i => `
+    ${evidenceItems.length ? `<dl class="evidence-grid" aria-label="关键结论依据">${evidenceItems.map(i => `
       <div class="evidence-item evidence-${esc(i.status || 'note')}">
-        <div class="evidence-label">${esc(i.label)}</div>
-        <div class="evidence-value">${esc(i.value)}</div>
-      </div>`).join('')}</div>` : ''}
+        <dt class="evidence-label">${esc(i.label)}</dt>
+        <dd class="evidence-value">${esc(i.value)}</dd>
+        ${i.meta ? `<dd class="evidence-meta">${esc(i.meta)}</dd>` : ''}
+      </div>`).join('')}</dl>` : ''}
     ${verdict.detail ? `<details class="verdict-detail-fold"><summary>查看结论依据</summary><p class="verdict-detail">${esc(verdict.detail)}</p></details>` : ''}
     ${nextAction ? `<div class="next-action"><span>${nextActionHeading}</span><strong>${esc(nextAction.label || '继续研究')}</strong>${nextAction.detail ? `<p>${esc(nextAction.detail)}</p>` : ''}</div>` : ''}
   </section>` : '';
@@ -323,9 +353,12 @@ const verdictBlock = (verdict.headline || verdict.detail || evidenceItems.length
 const shotCap = [d.scope || [d.symbol, d.timeframe].filter(Boolean).join(' · '), d.beforeAfter?.after?.params].filter(Boolean).map(esc).join(' · ');
 const shotBlock = shotImg ? `
   <section>
-    <h2 class="sec-h">回测截图 <span class="sec-sub">TradingView Strategy Tester</span></h2>
-    <div class="shotwrap">${shotImg}</div>
-    ${shotCap ? `<div class="shot-cap">${shotCap}</div>` : ''}
+    <h2 class="sec-h">${esc(d.screenshotTitle || '指标与交易信号')} <span class="sec-sub">${esc(d.screenshotLabel || 'TradingView · 本次回测')}</span></h2>
+    <div class="shotwrap" id="proof-shot">${shotImg}</div>
+    <div class="shot-meta">
+      ${shotCap ? `<div class="shot-cap">${shotCap}</div>` : '<span></span>'}
+      <button class="shot-toggle" type="button" aria-expanded="false" aria-controls="proof-shot" onclick="toggleShot(this)">查看完整截图</button>
+    </div>
   </section>` : '';
 
 // —— Before / After ——
@@ -343,16 +376,16 @@ if (d.beforeAfter && d.beforeAfter.before && d.beforeAfter.after) {
 // —— Explain ——
 const ex = d.explain || {};
 const specLabels = {
-  entry: '入场', exit: '出场', position: '仓位', execution: '执行时点', costs: '交易成本', exclusions: '明确不做',
+  observation: '观察', entry: '入场', exit: '出场', position: '仓位', execution: '执行时点', costs: '交易成本', exclusions: '明确不做',
 };
 const strategySpecRows = Object.entries(specLabels)
-  .map(([key, label]) => [label, d.strategySpec?.[key] || (key === 'costs' && d.costs ? [d.costs.commission && `手续费 ${d.costs.commission}`, d.costs.slippage && `滑点 ${d.costs.slippage}`].filter(Boolean).join(' · ') : '')])
-  .filter(([, value]) => value);
+  .map(([key, label]) => ({ key, label, value: d.strategySpec?.[key] || (key === 'costs' && d.costs ? [d.costs.commission && `手续费 ${d.costs.commission}`, d.costs.slippage && `滑点 ${d.costs.slippage}`].filter(Boolean).join(' · ') : '') }))
+  .filter(({ value }) => value);
 const modifiers = Array.isArray(d.strategySpec?.modifiers) ? d.strategySpec.modifiers.filter(i => i && (i.name || i.rule)) : [];
 const modifierHtml = modifiers.length ? `<div class="spec-modifiers"><div class="spec-label">可选条件</div>${modifiers.map(i => `
   <div class="modifier-row"><div><span class="modifier-name">${esc(i.name || '附加条件')}</span>${i.default ? `<span class="chip warn">默认${esc(i.default)}</span>` : ''}</div><div class="modifier-rule">${esc(i.rule || '')}${i.role ? `<span class="modifier-role">${esc(i.role)}</span>` : ''}</div></div>`).join('')}</div>` : '';
-const strategySpecHtml = (strategySpecRows.length || modifiers.length) ? `<div class="strategy-spec content-group"><div class="sub">Strategy Spec</div><div class="spec-grid">${strategySpecRows.map(([label, value]) => `
-  <div class="spec-item"><div class="spec-label">${esc(label)}</div><div class="spec-value">${esc(value)}</div></div>`).join('')}</div>${modifierHtml}</div>` : '';
+const strategySpecHtml = (strategySpecRows.length || modifiers.length) ? `<div class="strategy-spec content-group"><div class="sub">Strategy Spec</div><div class="spec-grid">${strategySpecRows.map(({ key, label, value }) => `
+  <div class="spec-item spec-${esc(key)}"><div class="spec-label">${esc(label)}</div><div class="spec-value">${esc(value)}</div></div>`).join('')}</div>${modifierHtml}</div>` : '';
 const flow = Array.isArray(ex.flow) ? ex.flow.filter(i => i && (typeof i === 'string' || i.text)) : [];
 const flowHtml = flow.length ? `<div class="seg content-group"><div class="sub">信号形成</div><ol class="signal-flow">${flow.map((step, i) => {
   const label = typeof step === 'string' ? `步骤 ${i + 1}` : (step.label || `步骤 ${i + 1}`);
@@ -376,6 +409,9 @@ const structuredExplain = [
 ].filter(([, value]) => value);
 const structuredExplainHtml = structuredExplain.length ? `<div class="explain-steps">${structuredExplain.map(([label, value]) => `
   <div class="explain-step"><div class="explain-step-label">${esc(label)}</div><div class="explain-step-text">${esc(value)}</div></div>`).join('')}</div>` : '';
+const readerGuide = Array.isArray(ex.readerGuide) ? ex.readerGuide.filter(i => i && (i.label || i.text)) : [];
+const readerGuideHtml = readerGuide.length ? `<div class="reader-guide content-group"><div class="sub">先看懂它</div><dl>${readerGuide.map(i => `
+  <div class="reader-guide-row"><dt>${esc(i.label || '关键概念')}</dt><dd>${esc(i.text || '')}</dd></div>`).join('')}</dl></div>` : '';
 const codeEvidence = Array.isArray(d.codeEvidence) ? d.codeEvidence.filter(i => i && i.code) : [];
 const paramsList = (ex.params || []).map(p => {
   const isKey = ex.keyParam && p.name === ex.keyParam;
@@ -389,23 +425,36 @@ const usageHtml = (ex.edge || keyParams.length || ex.worksWhen || ex.failsWhen) 
 </div>` : '';
 const deep = ex.deep || {};
 const deepVariables = Array.isArray(deep.variables) ? deep.variables.filter(v => v && (v.symbol || v.meaning)) : [];
-const usesAdaptiveExplain = flow.length || keyParams.length || modifiers.length || Object.keys(deep).length;
-const hasDeep = deep.intuition || deepVariables.length || deep.example || deep.formula || deep.derivation
+const deepEquations = Array.isArray(deep.equations) ? deep.equations.filter(item => item && (item.label || item.expression)) : [];
+const equationsHtml = deepEquations.length ? `<div class="equation-list">${deepEquations.map(item => `
+  <div class="equation-item">
+    <div class="equation-label">${esc(item.label || '公式')}</div>
+    <div class="equation-expression">${esc(item.expression || '')}</div>
+    ${item.note ? `<div class="equation-note">${esc(item.note)}</div>` : ''}
+  </div>`).join('')}</div>` : '';
+const variablesHtml = deepVariables.length ? `<dl class="variable-list">${deepVariables.map(v => `<div><dt>${esc(v.symbol || '')}</dt><dd>${esc(v.meaning || '')}</dd></div>`).join('')}</dl>` : '';
+const mathConceptHtml = deepEquations.length ? `<div class="math-concept-grid">
+  <div class="math-equations"><div class="detail-label">核心公式</div>${equationsHtml}</div>
+  <div class="math-variables"><div class="detail-label">符号说明</div>${variablesHtml}</div>
+</div>` : '';
+const usesAdaptiveExplain = readerGuide.length || flow.length || keyParams.length || modifiers.length || Object.keys(deep).length;
+const hasDeep = deep.intuition || deepVariables.length || deepEquations.length || deep.example || deep.formula || deep.derivation
   || ex.example || ex.formula || ex.derivation || paramsList || codeEvidence.length || ex.repaintNote;
-const deepHtml = hasDeep ? `<details class="derive seg deep-detail"><summary><span>深入理解这个指标</span></summary><div class="deep-detail-body">
+const deepHtml = hasDeep ? `<details class="derive seg deep-detail"${deep.open ? ' open' : ''}><summary><span>深入理解这个指标</span></summary><div class="deep-detail-body">
   ${deep.intuition ? `<div class="detail-label">先用直觉理解</div><p class="detail-example">${esc(deep.intuition)}</p>` : ''}
-  ${deepVariables.length ? `<div class="detail-label">符号说明</div><dl class="variable-list">${deepVariables.map(v => `<div><dt>${esc(v.symbol || '')}</dt><dd>${esc(v.meaning || '')}</dd></div>`).join('')}</dl>` : ''}
-  ${(deep.example || ex.example) ? `<div class="detail-label">计算示例</div><p class="detail-example">${esc(deep.example || ex.example)}</p>` : ''}
-  ${(deep.formula || ex.formula) ? `<div class="detail-label">公式</div><pre class="formula">${esc(deep.formula || ex.formula)}</pre>` : ''}
+  ${mathConceptHtml || (deepVariables.length ? `<div class="detail-label">符号说明</div>${variablesHtml}` : '')}
+  ${(deep.example || ex.example) ? `<div class="detail-example-box"><div class="detail-label">计算示例</div><p class="detail-example">${esc(deep.example || ex.example)}</p></div>` : ''}
+  ${!deepEquations.length && (deep.formula || ex.formula) ? `<div class="detail-label">公式</div><pre class="formula">${esc(deep.formula || ex.formula)}</pre>` : ''}
   ${(deep.derivation || ex.derivation) ? `<div class="detail-label">推导</div><p class="detail-example">${esc(deep.derivation || ex.derivation)}</p>` : ''}
   ${paramsList ? `<div class="detail-label">参数影响</div><ul class="params params-soft">${paramsList}</ul>` : ''}
-  ${codeEvidence.length ? `<div class="detail-label">关键代码</div><div class="code-evidence-body">${codeEvidence.map(i => `<div class="code-evidence-item"><div class="code-evidence-title">${esc(i.title || '关键逻辑')}</div><pre class="formula">${esc(i.code)}</pre>${i.explanation ? `<p class="code-evidence-note">${esc(i.explanation)}</p>` : ''}</div>`).join('')}</div>` : ''}
+  ${codeEvidence.length ? `<div class="detail-label">关键代码</div><div class="code-evidence-body">${codeEvidence.map(i => `<figure class="code-evidence-item"><figcaption class="code-evidence-head"><span class="code-evidence-title">${esc(i.title || '关键逻辑')}</span><span class="code-evidence-lang">Pine Script</span></figcaption><pre class="code-evidence-code"><code>${esc(i.code)}</code></pre>${i.explanation ? `<p class="code-evidence-note">${esc(i.explanation)}</p>` : ''}</figure>`).join('')}</div>` : ''}
   ${ex.repaintNote ? `<div class="detail-label">重绘与未来函数检查</div><p class="detail-example">${esc(ex.repaintNote)}</p>` : ''}
 </div></details>` : '';
 const isOverfit = (d.verdict || {}).type === 'overfit';
 const explainPlain = [
   ex.howItWorks,
-  ...strategySpecRows.map(([label, value]) => `【${label}】${value}`),
+  ...readerGuide.map(i => `【${i.label || '关键概念'}】${i.text || ''}`),
+  ...strategySpecRows.map(({ label, value }) => `【${label}】${value}`),
   ...modifiers.map(i => `【可选条件】${i.name || ''}${i.default ? `（默认${i.default}）` : ''}：${i.rule || ''}${i.role ? `；${i.role}` : ''}`),
   flow.length ? '【信号形成】\n' + flow.map((step, i) => `${i + 1}. ${typeof step === 'string' ? step : `${step.label || '步骤'}：${step.text}`}`).join('\n') : '',
   timeline.length ? '【信号形成】' + timeline.map((step, i) => `${i + 1}. ${step}`).join(' → ') : '',
@@ -418,8 +467,9 @@ const explainPlain = [
   keyParams.length ? '【关键参数】\n' + keyParams.map(p => `· ${p.name}：${p.effect}`).join('\n') : '',
   deep.intuition ? '【直觉理解】' + deep.intuition : '',
   deepVariables.length ? '【符号说明】\n' + deepVariables.map(v => `${v.symbol}：${v.meaning}`).join('\n') : '',
+  deepEquations.length ? '【核心公式】\n' + deepEquations.map(item => `${item.label || '公式'}：${item.expression || ''}${item.note ? `\n${item.note}` : ''}`).join('\n') : '',
   deep.example ? '【计算示例】\n' + deep.example : '',
-  deep.formula ? '【数学原理】\n' + deep.formula : '',
+  !deepEquations.length && deep.formula ? '【数学原理】\n' + deep.formula : '',
   deep.derivation ? '【数学推导】\n' + deep.derivation : '',
   (ex.params || []).length ? '【参数影响】\n' + ex.params.map(p => `· ${p.name}：${p.effect}`).join('\n') : '',
   ex.worksWhen ? '【有效场景】' + ex.worksWhen : '',
@@ -433,6 +483,7 @@ const explainBlock = Object.keys(ex).length ? `
     <pre class="explain-plain" hidden>${esc(explainPlain)}</pre>
     <div class="vspace">
       ${ex.howItWorks ? `<p class="para">${esc(ex.howItWorks)}</p>` : ''}
+      ${readerGuideHtml}
       ${strategySpecHtml}
       ${flowHtml}
       ${timelineHtml}
@@ -471,7 +522,7 @@ if (d.source) {
   <section class="source-section">
     ${showSourceAttribution ? `<h2 class="sec-h src-heading">${label}</h2><p class="src-desc">${description}</p>` : ''}
     <details class="src">
-      <summary><span class="src-open">${showSourceAttribution ? '展开完整源码' : '查看策略源码'}</span><span class="src-close">收起策略源码</span><span class="src-hint">Pine</span></summary>
+      <summary><span class="src-open">${showSourceAttribution ? '展开完整源码' : '查看策略源码'}</span><span class="src-close">收起策略源码</span><span class="src-hint">Pine Script</span></summary>
       <div class="codewrap">
         <button class="copybtn iconbtn" type="button" title="复制代码" aria-label="复制代码" onclick="doCopy(this,'pre.code')">${copySvg}</button>
         <pre class="code">${esc(d.source)}</pre>
@@ -572,7 +623,7 @@ const heatBlock = (() => {
   const svg = `<svg class="heatmap-svg" data-metric="${dm}" viewBox="0 0 ${W} ${H}" width="100%">${cellParts}${xlab}${ylab}<text x="${padL + xs.length * cellW / 2}" y="${H - 5}" text-anchor="middle" font-size="13" fill="#a1a1aa">${esc(hm.xParam.name)} →</text><text x="16" y="${cyMid}" text-anchor="middle" font-size="13" fill="#a1a1aa" transform="rotate(-90 16 ${cyMid})">${esc(hm.yParam.name)} →</text></svg>`;
   const fixedNote = hm.fixed?.length ? `<span class="hm-fixed">其余固定：${hm.fixed.map(f => esc(f.name + '=' + f.value)).join('、')}</span>` : '';
   const toggle = allowAlpha ? `<div class="hm-toggle" data-metric-toggle><button type="button" class="${dm === 'alpha' ? 'on' : ''}" data-m="alpha" onclick="hmToggle(this,'alpha')">α 超额</button><button type="button" class="${dm === 'ret' ? 'on' : ''}" data-m="ret" onclick="hmToggle(this,'ret')">总收益</button></div>` : '';
-  const comparisonNote = hm.comparisonNote || (allowAlpha ? '' : heatEvaluation.note);
+  const comparisonNote = hm.comparisonNote || '';
   const dimensions = numberValue(hm.searchedDimensions) ?? numberValue(d.optimization?.axes?.length) ?? 2;
   const matrixNote = dimensions > 2
     ? `本次共搜索 ${dimensions} 个参数；矩阵固定其余参数，只展示 Top-1 所在的二维切片。`
@@ -597,42 +648,48 @@ const objectiveLabel = (value) => ({
   alpha: '相对 B&H',
   win_rate_confidence: '胜率置信下界',
 }[value] || value || '研究目标');
-const evidenceSourceLabel = (value) => ({
-  strategy_results: 'Strategy Tester',
-  scan_cell_benchmarking: '同格基准',
-  run_benchmarking: '市场复验',
-  missing: '未记录',
-}[value] || value || '未记录');
 const optBlock = (() => {
   const opt = d.optimization;
   if (!opt) return '';
-  const optEvaluation = evaluationView({ evaluation: opt.evaluation || d.evaluation });
   const axes = Array.isArray(opt.axes) ? opt.axes : [];
   const axisText = axes.map(a => `${a.name}: ${(a.values || []).join(', ')}`).join('；');
   const rows = Array.isArray(opt.top) ? opt.top : [];
+  const heatmapCells = Array.isArray(d.heatmap?.cells) ? d.heatmap.cells : [];
+  const heatmapX = d.heatmap?.xParam?.name;
+  const heatmapY = d.heatmap?.yParam?.name;
+  const metricForRow = (row, key) => {
+    const direct = numberValue(row?.[key]);
+    if (direct != null) return direct;
+    const match = heatmapCells.find(cell => {
+      const xMatches = !heatmapX || String(row?.params?.[heatmapX]) === String(cell.x);
+      const yMatches = !heatmapY || String(row?.params?.[heatmapY]) === String(cell.y);
+      return xMatches && yMatches;
+    });
+    return numberValue(match?.[key]);
+  };
   const topRows = rows.length ? rows.map(r => `
       <tr>
         <td class="sym">#${esc(r.rank ?? '')}</td>
         <td class="muted p2-param">${esc(paramsText(r.params))}</td>
         <td class="${sgn(r.ret)}">${pct(r.ret)}</td>
-        <td class="muted">${pct(r.bh)}</td>
-        <td class="${optEvaluation.allowCandidateAlpha ? sgn(r.alpha) : 'muted'} big">${optEvaluation.allowCandidateAlpha ? pct(r.alpha) : '未排名'}</td>
+        <td class="muted">${metricForRow(r, 'pf') == null ? '—' : esc(metricForRow(r, 'pf').toFixed(2))}</td>
         <td class="muted">${esc(r.trades ?? '—')}</td>
-        <td><span class="source-tag">${esc(evidenceSourceLabel(r.benchmarkSource))}</span></td>
       </tr>`).join('') : `
-      <tr><td colspan="7" class="muted">暂无有效候选。</td></tr>`;
+      <tr><td colspan="5" class="muted">暂无有效候选。</td></tr>`;
+  const searchScope = opt.scope || [marketLabel(d.symbol), d.timeframe].filter(Boolean).join(' · ');
   return `
   <section class="optimization-ranking">
     <div class="sec-h-row"><h3 class="subsection-title">候选排名</h3><span class="muted">预算 ${esc(opt.budget ?? '—')}</span></div>
     <div class="p2-line">
+      ${searchScope ? `<span class="p2-scope">搜索市场：${esc(searchScope)}</span>` : ''}
       <span class="p2-objective">目标：${esc(objectiveLabel(opt.effectiveObjective || opt.effective_objective || opt.objective))}</span>
       ${opt.evaluated != null ? `<span class="muted">已评估 ${esc(opt.evaluated)} 组</span>` : ''}
     </div>
     ${axisText ? `<div class="chart-cap">${esc(axisText)}</div>` : ''}
     ${opt.shape?.verdict ? `<div class="p2-verdict">${esc(opt.shape.verdict)}</div>` : ''}
-    <div class="sub">本次搜索 Top-K</div>
+    <div class="sub">本次参数组合</div>
     <div class="table-scroll"><table class="grid optimization-table">
-      <thead><tr><th>排名</th><th>参数</th><th>策略</th><th>B&amp;H</th><th>${optEvaluation.allowCandidateAlpha ? 'α' : '基准比较'}</th><th>交易</th><th>证据源</th></tr></thead>
+      <thead><tr><th>排名</th><th>参数</th><th>策略收益</th><th>PF</th><th>交易</th></tr></thead>
       <tbody>${topRows}</tbody>
     </table></div>
   </section>`;
@@ -716,11 +773,23 @@ const oosBlock = (() => {
 })();
 
 // 组装：header → stats → 紧邻的研究结论 → 其余长内容。
-const sections = [shotBlock, baBlock, explainBlock, srcBlock, optimizationDetailBlock, validationBlock, robustBlock, oosBlock].filter(Boolean);
+const sections = [
+  { html: shotBlock },
+  { html: baBlock },
+  { html: explainBlock },
+  { html: srcBlock, compact: true },
+  { html: optimizationDetailBlock, compact: true },
+  { html: validationBlock },
+  { html: robustBlock },
+  { html: oosBlock },
+].filter(section => section.html);
 const rule = '<hr class="rule"/>';
-const body = statRow + costBlock + verdictBlock + sections.map(s => rule + s).join('') + rule;
+const body = statRow + costBlock + verdictBlock + sections
+  .map(section => `<hr class="rule${section.compact ? ' compact-rule' : ''}"/>${section.html}`)
+  .join('') + rule;
 
 const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
+<meta name="tv-indicator-report-template" content="${REPORT_TEMPLATE_VERSION}"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>${esc(d.title || '指标评估报告')}</title>
 <style>
@@ -739,6 +808,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     -webkit-font-smoothing:antialiased; font-size:14px; }
   .wrap{ --page-pad:16px; max-width:672px; margin:0 auto; padding:40px var(--page-pad); }
   hr.rule{ height:0; border:0; margin:34px 0; }
+  hr.rule.compact-rule{ margin:12px 0; }
   section > .sec-h, section > .sec-h-row{ }
   /* header */
   .head{ margin-bottom:24px; }
@@ -746,9 +816,12 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .pills{ display:flex; flex-wrap:wrap; gap:8px; }
   .pill-t{ padding:2px 8px; border-radius:4px; background:var(--z100); color:var(--z500);
     font-size:11px; font-weight:500; }
-  .share-report{ min-height:32px; padding:0 12px; border:1px solid var(--z200); border-radius:7px; background:#fff;
-    color:var(--z600); cursor:pointer; font-size:11px; font-weight:600; white-space:nowrap; }
-  .share-report:hover{ border-color:var(--z400); color:var(--z900); }
+  .report-actions{ flex:0 0 auto; display:flex; align-items:center; gap:2px; }
+  .report-action{ min-height:28px; padding:0 8px; border:0; border-radius:5px; background:transparent;
+    color:var(--z500); cursor:pointer; font:inherit; font-size:11px; font-weight:600; line-height:1; text-decoration:none;
+    white-space:nowrap; display:inline-flex; align-items:center; justify-content:center; }
+  .report-action:hover{ background:var(--z50); color:var(--z900); }
+  .report-action:focus-visible{ outline:2px solid var(--z300); outline-offset:2px; }
   .htitle{ font-size:24px; font-weight:700; letter-spacing:-.3px; line-height:1.25; color:var(--z900); }
   .hone{ margin-top:8px; font-size:14px; line-height:1.7; color:var(--z500); }
   /* section header */
@@ -766,7 +839,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .s-sub{ font-size:11px; color:var(--z400); margin-top:2px; font-variant-numeric:tabular-nums; }
   .costline{ margin-top:18px; font-size:11px; line-height:1.6; color:var(--z400); }
   /* verdict evidence strip */
-  .verdict-panel{ margin:24px calc(var(--page-pad) * -1) 0; padding:18px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
+  .verdict-panel{ margin:24px 0 0; padding:18px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
   .verdict-top{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
   .verdict-title{ max-width:520px; font-size:17px; line-height:1.45; font-weight:700; color:var(--z900); }
   .verdict-detail{ margin-top:14px; font-size:12px; line-height:1.75; color:var(--z500); }
@@ -780,13 +853,19 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .evidence-item{ min-width:0; padding:2px 16px 2px 0; }
   .evidence-item + .evidence-item{ padding-left:16px; border-left:1px solid var(--z100); }
   .evidence-label{ font-size:10px; color:var(--z400); font-weight:600; }
-  .evidence-value{ margin-top:5px; font-size:12px; line-height:1.5; color:var(--z700); font-weight:700; }
+  .evidence-value{ margin-top:5px; font-size:13px; line-height:1.45; color:var(--z700); font-weight:700; }
+  .evidence-meta{ margin-top:4px; font-size:10px; line-height:1.55; color:var(--z500); font-weight:500; }
   .evidence-fail .evidence-value{ color:var(--negFg); }
   .evidence-win .evidence-value{ color:var(--posFg); }
   /* backtest screenshot */
-  .shotwrap{ border-radius:12px; overflow:hidden; border:1px solid var(--z100); }
-  .shot{ width:100%; display:block; }
-  .shot-cap{ font-size:11px; color:var(--z400); margin-top:8px; text-align:center; }
+  .shotwrap{ aspect-ratio:16/9; border-radius:12px; overflow:hidden; border:1px solid var(--z100); background:#fff; }
+  .shotwrap.is-full{ aspect-ratio:auto; }
+  .shot{ width:100%; height:100%; display:block; object-fit:contain; object-position:center; }
+  .shotwrap.is-full .shot{ height:auto; object-fit:contain; }
+  .shot-meta{ margin-top:8px; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+  .shot-cap{ font-size:11px; line-height:1.55; color:var(--z400); }
+  .shot-toggle{ flex:0 0 auto; border:0; background:transparent; color:var(--z500); font:inherit; font-size:11px; font-weight:650; cursor:pointer; }
+  .shot-toggle:hover{ color:var(--z800); }
   /* before/after */
   .ba{ display:flex; align-items:stretch; gap:12px; }
   .ba-box{ flex:1; border-radius:12px; padding:16px 16px 16px 0; background:transparent; }
@@ -803,11 +882,20 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .explain-step{ display:grid; grid-template-columns:76px 1fr; gap:14px; align-items:start; }
   .explain-step-label{ font-size:12px; font-weight:600; color:var(--z700); }
   .explain-step-text{ font-size:13px; line-height:1.7; color:var(--z600); }
+  .reader-guide{ padding-top:14px; padding-bottom:14px; }
+  .reader-guide > .sub{ margin-bottom:10px; }
+  .reader-guide dl{ display:flex; flex-direction:column; }
+  .reader-guide-row{ display:grid; grid-template-columns:96px 1fr; gap:12px; align-items:start; }
+  .reader-guide-row + .reader-guide-row{ margin-top:10px; padding-top:10px; border-top:1px solid var(--z100); }
+  .reader-guide dt{ color:var(--z700); font-size:12px; font-weight:700; }
+  .reader-guide dd{ color:var(--z600); font-size:13px; line-height:1.65; }
   .seg{ padding-top:0; border-top:0; }
-  .content-group{ margin-inline:calc(var(--page-pad) * -1); padding:17px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
+  .content-group{ margin-inline:0; padding:17px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
+  .reader-guide.content-group{ padding-block:14px; }
   .content-group > .sub{ margin-bottom:14px; color:var(--z700); font-size:13px; font-weight:700; }
   .spec-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px 24px; }
   .spec-item{ min-width:0; }
+  .spec-observation{ grid-column:1 / -1; padding-bottom:12px; border-bottom:1px solid var(--z100); }
   .spec-label{ font-size:11px; font-weight:600; color:var(--z400); }
   .spec-value{ margin-top:3px; font-size:13px; line-height:1.6; color:var(--z700); }
   .spec-modifiers{ margin-top:14px; padding-top:12px; }
@@ -842,10 +930,26 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .math-detail-body,.code-evidence-body{ margin-top:12px; }
   .detail-label{ margin:12px 0 6px; font-size:11px; font-weight:600; color:var(--z500); }
   .detail-label:first-child{ margin-top:0; }
-  .detail-example{ font-size:12px; line-height:1.7; color:var(--z600); }
-  .code-evidence-body{ display:flex; flex-direction:column; gap:16px; }
-  .code-evidence-title{ font-size:13px; font-weight:600; color:var(--z700); margin-bottom:7px; }
-  .code-evidence-note{ margin-top:7px; font-size:12px; line-height:1.65; color:var(--z500); }
+  .detail-example{ font-size:12px; line-height:1.7; color:var(--z600); white-space:pre-line; }
+  .math-concept-grid{ display:grid; grid-template-columns:1fr; gap:18px; align-items:start; margin-top:12px; }
+  .equation-list{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .equation-item{ padding:13px 14px; border-radius:9px; background:#fff; }
+  .equation-label{ font-size:10px; font-weight:700; letter-spacing:.04em; color:var(--z400); }
+  .equation-expression{ margin-top:5px; font-family:"STIX Two Math","Cambria Math","Times New Roman",serif; font-size:17px; line-height:1.55; color:var(--z800); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .equation-note{ margin-top:5px; font-size:11px; line-height:1.55; color:var(--z500); }
+  .math-variables{ padding-top:2px; }
+  .variable-list{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px; }
+  .detail-example-box{ margin-top:16px; padding:13px 14px; border-radius:9px; background:#fff; }
+  .detail-example-box .detail-label{ margin-top:0; }
+  .code-evidence-body{ display:grid; grid-template-columns:1fr; gap:12px; }
+  .code-evidence-item{ min-width:0; margin:0; border-radius:10px; overflow:hidden; background:#fff; }
+  .code-evidence-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; background:#fff; }
+  .code-evidence-title{ font-size:12px; font-weight:650; color:var(--z700); }
+  .code-evidence-lang,.src-hint{ flex:0 0 auto; padding:3px 7px; border-radius:5px; background:var(--z100); font-family:var(--mono); font-size:9px; font-weight:600; letter-spacing:.02em; color:var(--z500); }
+  .code-evidence-code,pre.code{ background:var(--z50); font-family:var(--mono); font-size:11.5px; line-height:1.75; color:var(--z700); tab-size:2; }
+  .code-evidence-code{ margin:0; padding:14px 16px; white-space:pre; overflow-x:auto; }
+  .code-evidence-code code{ font:inherit; color:inherit; }
+  .code-evidence-note{ margin:0; padding:10px 12px 11px; font-size:12px; line-height:1.65; color:var(--z500); background:#fff; }
   .usage-edge{ font-size:13px; line-height:1.65; color:var(--z700); }
   .usage-edge > span,.usage-scenes span{ display:block; font-size:11px; font-weight:600; color:var(--z400); margin-bottom:3px; }
   .usage-params{ margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; }
@@ -854,9 +958,9 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .usage-scenes{ margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:20px; font-size:12px; line-height:1.65; color:var(--z600); }
   details.deep-detail{ padding:2px 0; }
   details.deep-detail > summary{ min-height:40px; padding:0 2px; color:var(--z600); font-size:12px; font-weight:650; }
-  .deep-detail-body{ margin:10px calc(var(--page-pad) * -1) 0; padding:16px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
-  .variable-list > div{ display:grid; grid-template-columns:72px 1fr; gap:12px; padding:6px 0; }
-  .variable-list dt{ font-family:var(--mono); font-size:12px; color:var(--z700); }
+  .deep-detail-body{ margin:10px 0 0; padding:16px var(--page-pad); border:0; border-radius:0; background:var(--z50); }
+  .variable-list > div{ display:grid; grid-template-columns:62px 1fr; gap:10px; padding:5px 0; }
+  .variable-list dt{ font-family:"STIX Two Math","Cambria Math","Times New Roman",serif; font-size:14px; color:var(--z700); }
   .variable-list dd{ font-size:12px; line-height:1.6; color:var(--z500); }
   ul.params{ list-style:none; }
   ul.params li{ padding:10px 0; }
@@ -910,22 +1014,20 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .src-heading{ margin-bottom:6px; }
   .src-desc{ font-size:12px; line-height:1.65; color:var(--z400); margin-bottom:12px; }
   details.src > summary{ list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px;
-    width:max-content; font-size:12px; font-weight:600; color:var(--z600); user-select:none; }
+    width:max-content; min-height:36px; font-size:12px; font-weight:600; color:var(--z600); user-select:none; }
   details.src > summary::-webkit-details-marker{ display:none; }
   details.src > summary::before{ content:"▸"; color:var(--z400); font-size:12px; transform:translateY(-1px); }
   details.src[open] > summary::before{ content:"▾"; }
   details.src .src-close{ display:none; }
   details.src[open] .src-open{ display:none; }
   details.src[open] .src-close{ display:inline; }
-  .src-hint{ font-size:12px; font-weight:400; color:var(--z400); }
   .codewrap{ position:relative; margin-top:14px; }
   .copybtn{ position:absolute; top:8px; right:8px; z-index:1; }
   .iconbtn{ display:inline-flex; align-items:center; justify-content:center; width:28px; height:24px; padding:0;
     border-radius:6px; border:1px solid var(--z200); background:var(--bg); color:var(--z500); cursor:pointer; flex-shrink:0; }
   .iconbtn:hover{ background:var(--z50); color:var(--z800); }
   .iconbtn.done{ color:var(--pos); border-color:var(--posBd); background:var(--posBg); }
-  pre.code{ background:var(--z50); border-radius:8px; padding:14px 16px; font-family:var(--mono);
-    font-size:12px; line-height:1.7; color:var(--z700); white-space:pre; overflow-x:auto; max-height:420px; overflow-y:auto; }
+  pre.code{ border-radius:8px; padding:14px 16px; white-space:pre; overflow-x:auto; max-height:420px; overflow-y:auto; }
   /* 参数敏感性热力图 */
   .hm-toggle{ display:flex; gap:4px; }
   .hm-toggle button{ padding:3px 10px; border-radius:6px; border:1px solid var(--z200); background:var(--bg); color:var(--z500); font-size:11px; font-weight:500; font-family:var(--font); cursor:pointer; }
@@ -951,6 +1053,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .research-detail-body > section + section{ margin-top:24px; border-top:1px solid var(--z100); }
   .subsection-title{ color:var(--z700); font-size:13px; font-weight:700; }
   .p2-line{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; font-size:12px; }
+  .p2-scope{ color:var(--z700); font-weight:650; }
   .p2-objective{ color:var(--z600); font-weight:600; }
   .p2-verdict{ margin:10px 0 14px; font-size:12px; line-height:1.7; color:var(--z500); }
   .p2-param{ max-width:180px; white-space:normal; line-height:1.5; }
@@ -970,7 +1073,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     hr.rule{ margin:28px 0; }
     .head{ margin-bottom:22px; }
     .report-utility{ align-items:center; }
-    .share-report{ min-height:40px; }
+    .report-action{ min-height:40px; padding-inline:9px; }
     .htitle{ font-size:26px; }
     .stats{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px 14px; }
     .stat,.stat:first-child,.stat:last-child{ padding:0; }
@@ -982,7 +1085,9 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     .evidence-grid{ grid-template-columns:1fr; gap:12px; }
     .evidence-item,.evidence-item + .evidence-item{ padding:0; border-left:0; }
     .next-action{ grid-template-columns:64px 1fr; }
+    .shot-meta{ align-items:flex-start; }
     .spec-grid,.usage-params,.usage-scenes,.callouts,.oos-cols{ grid-template-columns:1fr; }
+    .spec-observation{ grid-column:auto; }
     .modifier-row{ grid-template-columns:1fr; gap:4px; }
     .signal-flow li{ grid-template-columns:72px 1fr; gap:12px; }
     .timeline{ grid-template-columns:1fr; gap:12px; }
@@ -993,23 +1098,28 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     .bar-sym{ width:62px; }
     .bar-val{ width:68px; }
     table.grid{ min-width:580px; }
-    .optimization-table{ min-width:720px; }
+    .optimization-table{ min-width:560px; }
     details.research-detail > summary{ min-height:56px; padding:0 14px; }
     .research-detail-body{ padding:0 14px 16px; }
     .hm-toggle{ flex-shrink:0; }
     .shot-cap{ text-align:left; }
+    .equation-list,.variable-list,.code-evidence-body{ grid-template-columns:1fr; }
   }
   @media (max-width:420px){
     .pills{ gap:5px; }
     .pill-t{ max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .hone{ font-size:13px; }
     .content-group,.deep-detail-body{ padding:15px var(--page-pad); }
+    .reader-guide-row{ grid-template-columns:1fr; gap:3px; }
     .signal-flow li{ grid-template-columns:1fr; gap:2px; }
     .flow-label{ color:var(--z700); }
+    .code-evidence-head{ align-items:flex-start; }
+    .code-evidence-code{ padding:13px 12px; }
+    .code-evidence-code,pre.code{ font-size:10.5px; }
     details.research-detail > summary small{ display:none; }
   }
 </style></head>
-<body><div class="wrap">
+<body data-report-template-version="${REPORT_TEMPLATE_VERSION}"><div class="wrap">
 
   <header class="head">
     <div class="report-utility">
@@ -1017,7 +1127,10 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
         ${d.type ? `<span class="pill-t">${esc(d.type)}</span>` : ''}
         ${d.symbol ? `<span class="pill-t">${esc(d.symbol)}${d.timeframe ? ' · ' + esc(d.timeframe) : ''}</span>` : ''}
       </div>
-      <button class="share-report" type="button" onclick="shareReport(this)">分享案例</button>
+      <nav class="report-actions" aria-label="页面操作">
+        <a class="report-action" href="../">返回首页</a>
+        <button class="report-action" type="button" onclick="shareReport(this)">分享案例</button>
+      </nav>
     </div>
     <h1 class="htitle">${esc(d.title || '指标评估')}</h1>
     ${d.oneLiner ? `<p class="hone">${esc(d.oneLiner)}</p>` : ''}
@@ -1042,6 +1155,13 @@ function doCopy(btn, sel){
     var orig = btn.innerHTML; btn.innerHTML = CHECK_SVG; btn.classList.add('done');
     setTimeout(function(){ btn.innerHTML = orig; btn.classList.remove('done'); }, 1500);
   });
+}
+function toggleShot(btn){
+  var wrap = document.getElementById(btn.getAttribute('aria-controls'));
+  if (!wrap) return;
+  var full = wrap.classList.toggle('is-full');
+  btn.setAttribute('aria-expanded', String(full));
+  btn.textContent = full ? '收起完整截图' : '查看完整截图';
 }
 async function shareReport(btn){
   var status = document.getElementById('share-status');
@@ -1090,7 +1210,11 @@ function hmHide(){ document.querySelectorAll('.hm-tip').forEach(function(t){ t.h
 function main() {
   const dataPath = process.argv[2];
   if (!dataPath) { console.error('用法: node report.mjs <data.json> [--check|--card]'); process.exit(1); }
-  const d = JSON.parse(readFileSync(dataPath, 'utf8'));
+  const resolvedDataPath = resolve(dataPath);
+  const dataDir = dirname(resolvedDataPath);
+  const d = JSON.parse(readFileSync(resolvedDataPath, 'utf8'));
+  if (!d.source && d.sourceFile) d.source = readFileSync(resolve(dataDir, d.sourceFile), 'utf8');
+  if (!d.screenshot && d.screenshotFile) d.screenshot = resolve(dataDir, d.screenshotFile);
   const out = d.out || join(homedir(), '.tv-skill', 'report.html');
   const { errors, warnings } = validateData(d);
   warnings.forEach(w => console.error('⚠️  ' + w));

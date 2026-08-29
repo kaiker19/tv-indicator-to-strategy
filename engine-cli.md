@@ -153,10 +153,11 @@ run_summary.nextRead.action = generate_report
 准备符合 `engine/report_data.example.json` 结构的 JSON，并运行：
 
 ```bash
+node "$SKILL_DIR/engine/report.mjs" /tmp/report-data.json --check
 node "$SKILL_DIR/engine/report.mjs" /tmp/report-data.json
 ```
 
-报告 JSON 中的 symbol、timeframe、范围、成本、参数和 metrics 必须来自同一次运行。完整案例固定展示 QQQ、SPY、510300；外层案例卡直接读取报告内嵌的 `case-summary`，不维护第二份手工摘要。
+报告 JSON 中的 symbol、timeframe、范围、成本、参数和 metrics 必须来自同一次运行。Agent 只填写 JSON；HTML、CSS、栏目顺序和交互全部交给 `report.mjs` 的固定模板，禁止手写页面或复用旧 HTML。完整案例固定展示 QQQ、SPY、510300；外层案例卡直接读取报告内嵌的 `case-summary`，不维护第二份手工摘要。Strategy Spec 用 `observation` 明确策略实际计算和观察的中枢、边界或状态，不能只写入场、出场；可见文案只写“按收盘价执行”“不重复加仓”等交易语义，不显示 Pine 实现标志。指标建立在普通读者可能不知道的基础概念上时，用 `explain.readerGuide[]` 按“普通概念 → 专业名称 → 实际作用”解释后再进入 Strategy Spec；专有名词必须在第一次可见正文出现时定义，并尽量给抽象参数一个数值锚点。外层概述、基础概念、精确规则、必要的状态顺序和参数场景各写一次；相邻块只是在换词复述时删掉较泛的一段，`readerGuide` 已足够时可省略 `howItWorks`，Strategy Spec 已清楚表达简单交易顺序时省略 `flow`。可见文案使用直接肯定句，避免“这不是……而是……”“只负责……”等公式化转折。公式优先使用 `explain.deep.equations[]`；每式列出的 `symbols[]` 必须在 `deep.variables[]` 逐一定义，并提供含 3–6 个简化数值、完整写出代入与中间结果的 `deep.example`，否则报告校验失败。核函数、距离函数或平滑器可替换时，要说明本次源码固定实现与替换后的复验要求。proof 必须看得见指标的核心结构且不含无关 study；通道类截图必须辨认中线、上轨和下轨。参数排名先写搜索市场和周期，可见列只保留参数、策略收益、PF 和交易数，B&H 与证据源继续保存在 JSON 中供审计。生成页带有 `tv-indicator-report-template` 版本标记；批量发布时所有页面必须使用同一版本。
 
 ## 常见失败
 

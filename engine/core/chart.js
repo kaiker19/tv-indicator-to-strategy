@@ -14,6 +14,73 @@ function _resolve(deps) {
   };
 }
 
+function ticker(value) {
+  return String(value || '').trim().toUpperCase().split(':').at(-1);
+}
+
+async function readSeriesSnapshot(evaluate = _evaluate) {
+  return evaluate(`
+    (function() {
+      try {
+        var chart = ${CHART_API};
+        var series = chart._chartWidget.model().mainSeries();
+        var bars = series.bars();
+        if (!bars || typeof bars.firstIndex !== 'function' || typeof bars.lastIndex !== 'function') return null;
+        var firstIndex = bars.firstIndex();
+        var lastIndex = bars.lastIndex();
+        if (!Number.isFinite(firstIndex) || !Number.isFinite(lastIndex) || lastIndex < firstIndex) return null;
+        var middleIndex = Math.floor((firstIndex + lastIndex) / 2);
+        var anchorIndex = Math.max(firstIndex, lastIndex - 1);
+        function stableBar(index) {
+          var value = bars.valueAt(index);
+          return value ? value.slice(0, 6) : null;
+        }
+        return {
+          currentSymbol: typeof chart.symbol === 'function' ? chart.symbol() : null,
+          actualSymbol: typeof series.actualSymbol === 'function' ? series.actualSymbol() : null,
+          barCount: lastIndex - firstIndex + 1,
+          fingerprint: JSON.stringify([
+            stableBar(firstIndex),
+            stableBar(middleIndex),
+            stableBar(anchorIndex)
+          ])
+        };
+      } catch(e) { return null; }
+    })()
+  `);
+}
+
+export function seriesDataReady(before, after, expectedSymbol) {
+  if (!after || !(Number(after.barCount) > 0)) return false;
+  const expectedTicker = ticker(expectedSymbol);
+  if (!expectedTicker || ticker(after.currentSymbol) !== expectedTicker) return false;
+  if (after.actualSymbol && ticker(after.actualSymbol) !== expectedTicker) return false;
+
+  const beforeTicker = ticker(before?.actualSymbol || before?.currentSymbol);
+  if (!before || beforeTicker === expectedTicker) return true;
+  return Boolean(before.fingerprint && after.fingerprint && before.fingerprint !== after.fingerprint);
+}
+
+export async function waitForSeriesDataSwitch({
+  expectedSymbol,
+  before,
+  timeoutMs = 10_000,
+  pollMs = 200,
+  _deps,
+} = {}) {
+  const evaluate = _deps?.evaluate || _evaluate;
+  const snapshot = _deps?.readSeriesSnapshot || (() => readSeriesSnapshot(evaluate));
+  const sleep = _deps?.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
+  const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 10_000);
+
+  while (Date.now() <= deadline) {
+    const after = await snapshot();
+    if (seriesDataReady(before, after, expectedSymbol)) return true;
+    await sleep(Math.max(0, Number(pollMs) || 0));
+  }
+  return false;
+}
+
 export async function getState({ _deps } = {}) {
   const { evaluate } = _resolve(_deps);
   const state = await evaluate(`
@@ -37,19 +104,33 @@ export async function getState({ _deps } = {}) {
   return { success: true, ...state };
 }
 
+export function symbolForChartSet(symbol) {
+  return String(symbol || '').trim().replace(/^([^:]+)_(?:DLY|DL):/i, '$1:');
+}
+
 export async function setSymbol({ symbol, _deps }) {
-  const { evaluateAsync, waitForChartReady } = _resolve(_deps);
+  const { evaluate, evaluateAsync, waitForChartReady } = _resolve(_deps);
+  const chartSymbol = symbolForChartSet(symbol);
+  const before = await readSeriesSnapshot(evaluate);
   await evaluateAsync(`
     (function() {
       var chart = ${CHART_API};
       return new Promise(function(resolve) {
-        chart.setSymbol(${safeString(symbol)}, {});
+        chart.setSymbol(${safeString(chartSymbol)}, {});
         setTimeout(resolve, 500);
       });
     })()
   `);
   const ready = await waitForChartReady(symbol);
-  return { success: true, symbol, chart_ready: ready };
+  const dataReady = await waitForSeriesDataSwitch({
+    expectedSymbol: chartSymbol,
+    before,
+    _deps,
+  });
+  if (!dataReady) {
+    throw new Error(`CHART_SYMBOL_DATA_STALE: ${chartSymbol} title changed but main-series bars did not.`);
+  }
+  return { success: true, symbol, chart_symbol: chartSymbol, chart_ready: ready, series_data_ready: true };
 }
 
 export async function setTimeframe({ timeframe, _deps }) {
@@ -224,19 +305,66 @@ export async function symbolInfo({ _deps } = {}) {
   const result = await evaluate(`
     (function() {
       var chart = ${CHART_API};
-      var info = chart.symbolExt();
+      var info = null;
+      try { info = chart.symbolExt(); } catch(e) {}
       if (!info) {
+        var requestedSymbol = null;
+        var actualSymbol = null;
+        var seriesInfo = null;
+        var seriesInvalid = null;
+        var resolution = null;
+        var chartType = null;
+        var barCount = 0;
+        try { requestedSymbol = typeof chart.symbol === 'function' ? chart.symbol() : null; } catch(e) {}
+        try { resolution = typeof chart.resolution === 'function' ? chart.resolution() : null; } catch(e) {}
+        try { chartType = typeof chart.chartType === 'function' ? chart.chartType() : null; } catch(e) {}
+        try {
+          var series = chart._chartWidget.model().mainSeries();
+          actualSymbol = typeof series.actualSymbol === 'function' ? series.actualSymbol() : null;
+          seriesInfo = typeof series.symbolInfo === 'function' ? series.symbolInfo() : null;
+          seriesInvalid = typeof series.isSymbolInvalid === 'function' ? series.isSymbolInvalid() : null;
+          var bars = series.bars();
+          if (bars && typeof bars.firstIndex === 'function' && typeof bars.lastIndex === 'function') {
+            var firstIndex = bars.firstIndex();
+            var lastIndex = bars.lastIndex();
+            if (Number.isFinite(firstIndex) && Number.isFinite(lastIndex) && lastIndex >= firstIndex) {
+              barCount = lastIndex - firstIndex + 1;
+            }
+          }
+        } catch(e) {}
+        if (seriesInvalid !== true && actualSymbol && resolution && barCount > 0) {
+          var resolvedSymbol = (seriesInfo && (seriesInfo.symbol || seriesInfo.full_name)) || actualSymbol;
+          var separator = resolvedSymbol.indexOf(':');
+          return {
+            resolved: true,
+            symbol: resolvedSymbol,
+            full_name: (seriesInfo && seriesInfo.full_name) || resolvedSymbol,
+            exchange: (seriesInfo && seriesInfo.exchange) || (separator > 0 ? resolvedSymbol.slice(0, separator) : null),
+            description: (seriesInfo && seriesInfo.description) || null,
+            type: (seriesInfo && seriesInfo.type) || null,
+            pro_name: (seriesInfo && seriesInfo.pro_name) || resolvedSymbol,
+            typespecs: (seriesInfo && seriesInfo.typespecs) || null,
+            resolution: resolution,
+            chart_type: chartType,
+            bar_count: barCount,
+            resolution_source: 'chart_series_fallback'
+          };
+        }
         return {
           resolved: false,
-          requested_symbol: typeof chart.symbol === 'function' ? chart.symbol() : null,
-          resolution: typeof chart.resolution === 'function' ? chart.resolution() : null
+          requested_symbol: requestedSymbol,
+          actual_symbol: actualSymbol,
+          resolution: resolution,
+          bar_count: barCount,
+          series_invalid: seriesInvalid
         };
       }
       return {
         resolved: true,
         symbol: info.symbol, full_name: info.full_name, exchange: info.exchange,
         description: info.description, type: info.type, pro_name: info.pro_name,
-        typespecs: info.typespecs, resolution: chart.resolution(), chart_type: chart.chartType()
+        typespecs: info.typespecs, resolution: chart.resolution(), chart_type: chart.chartType(),
+        resolution_source: 'symbol_ext'
       };
     })()
   `);
