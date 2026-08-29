@@ -187,6 +187,14 @@ export function validateData(d) {
     if (!h.xParam?.name || !Array.isArray(h.xParam?.values)) errors.push('heatmap.xParam 需含 name 与 values[]');
     if (!h.yParam?.name || !Array.isArray(h.yParam?.values)) errors.push('heatmap.yParam 需含 name 与 values[]');
   }
+  const optimizationTop = Array.isArray(d.optimization?.top) ? d.optimization.top.filter(Boolean) : [];
+  optimizationTop.forEach((row, index) => {
+    const trades = numberValue(row?.trades ?? row?.total_trades);
+    const pf = numberValue(row?.pf ?? row?.profit_factor);
+    if (trades != null && trades > 0 && pf == null) {
+      errors.push(`optimization.top[${index}].pf 缺失：有交易的候选必须保留 Strategy Tester 的 PF`);
+    }
+  });
   const deep = d.explain?.deep;
   const equations = Array.isArray(deep?.equations) ? deep.equations.filter(Boolean) : [];
   if (equations.length) {
@@ -453,7 +461,7 @@ const hasDeep = deep.intuition || deepVariables.length || deepEquations.length |
 const deepHtml = hasDeep ? `<details class="derive seg deep-detail"${deep.open ? ' open' : ''}><summary><span>深入理解这个指标</span></summary><div class="deep-detail-body">
   ${deep.intuition ? `<div class="detail-label">先用直觉理解</div><p class="detail-example">${esc(deep.intuition)}</p>` : ''}
   ${mathConceptHtml || (deepVariables.length ? `<div class="detail-label">符号说明</div>${variablesHtml}` : '')}
-  ${(deep.example || ex.example) ? `<div class="detail-example-box"><div class="detail-label">计算示例</div><p class="detail-example">${esc(deep.example || ex.example)}</p></div>` : ''}
+  ${(deep.example || ex.example) ? `<div class="detail-example-box"><div class="detail-label">计算示例</div><p class="detail-example math-example">${esc(deep.example || ex.example)}</p></div>` : ''}
   ${!deepEquations.length && (deep.formula || ex.formula) ? `<div class="detail-label">公式</div><pre class="formula">${esc(deep.formula || ex.formula)}</pre>` : ''}
   ${(deep.derivation || ex.derivation) ? `<div class="detail-label">推导</div><p class="detail-example">${esc(deep.derivation || ex.derivation)}</p>` : ''}
   ${paramsList ? `<div class="detail-label">参数影响</div><ul class="params params-soft">${paramsList}</ul>` : ''}
@@ -951,6 +959,7 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .variable-list{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px; }
   .detail-example-box{ margin-top:16px; padding:13px 14px; border-radius:9px; background:#fff; }
   .detail-example-box .detail-label{ margin-top:0; }
+  .math-example{ font-family:"STIX Two Math","Cambria Math","Times New Roman",var(--font); font-size:13px; font-variant-numeric:lining-nums; }
   .code-evidence-body{ display:grid; grid-template-columns:1fr; gap:12px; }
   .code-evidence-item{ min-width:0; margin:0; border-radius:10px; overflow:hidden; background:#fff; }
   .code-evidence-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; background:#fff; }

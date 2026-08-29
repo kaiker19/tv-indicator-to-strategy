@@ -56,6 +56,25 @@
     ],
     "worksWhen": "写明适用市场状态。",
     "failsWhen": "写明容易失效的市场状态。",
+    "deep": {
+      "intuition": "示例：先用一句白话解释计算为什么这样做。",
+      "variables": [
+        { "symbol": "Eₜ", "meaning": "当前 EMA。" },
+        { "symbol": "Eₜ₋₁", "meaning": "上一根 EMA。" },
+        { "symbol": "Cₜ", "meaning": "当前收盘价。" },
+        { "symbol": "α", "meaning": "EMA 平滑系数。" }
+      ],
+      "equations": [
+        {
+          "label": "EMA 递推示例",
+          "expression": "Eₜ = α × Cₜ + (1 − α) × Eₜ₋₁",
+          "symbols": ["Eₜ", "α", "Cₜ", "Eₜ₋₁"],
+          "note": "符号必须在 variables[] 中逐一定义。"
+        }
+      ],
+      "example": "若 Cₜ = 105、Eₜ₋₁ = 100、α = 0.2，则 Eₜ = 0.2 × 105 + 0.8 × 100 = 101。",
+      "derivation": "示例与公式沿用同一套符号、上下标和运算符。"
+    },
     "repaint": "unverified",
     "repaintNote": "完成源码审计后再填写。"
   },
