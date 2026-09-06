@@ -10,15 +10,26 @@ export async function click({ by, value }) {
       var by = ${JSON.stringify(by)};
       var value = ${escaped};
       var el = null;
-      if (by === 'aria-label') el = document.querySelector('[aria-label="' + value.replace(/"/g, '\\\\"') + '"]');
-      else if (by === 'data-name') el = document.querySelector('[data-name="' + value.replace(/"/g, '\\\\"') + '"]');
+      function visible(node) {
+        if (!node) return false;
+        var rect = node.getBoundingClientRect();
+        var style = window.getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      }
+      function firstVisible(selector) {
+        var nodes = document.querySelectorAll(selector);
+        for (var j = 0; j < nodes.length; j++) if (visible(nodes[j])) return nodes[j];
+        return null;
+      }
+      if (by === 'aria-label') el = firstVisible('[aria-label="' + value.replace(/"/g, '\\\\"') + '"]');
+      else if (by === 'data-name') el = firstVisible('[data-name="' + value.replace(/"/g, '\\\\"') + '"]');
       else if (by === 'text') {
         var candidates = document.querySelectorAll('button, a, [role="button"], [role="menuitem"], [role="tab"]');
         for (var i = 0; i < candidates.length; i++) {
           var text = candidates[i].textContent.trim();
-          if (text === value || text.toLowerCase() === value.toLowerCase()) { el = candidates[i]; break; }
+          if (visible(candidates[i]) && (text === value || text.toLowerCase() === value.toLowerCase())) { el = candidates[i]; break; }
         }
-      } else if (by === 'class-contains') el = document.querySelector('[class*="' + value.replace(/"/g, '\\\\"') + '"]');
+      } else if (by === 'class-contains') el = firstVisible('[class*="' + value.replace(/"/g, '\\\\"') + '"]');
       if (!el) return { found: false };
       el.click();
       return { found: true, tag: el.tagName.toLowerCase(), text: (el.textContent || '').trim().substring(0, 80), aria_label: el.getAttribute('aria-label') || null, data_name: el.getAttribute('data-name') || null };
@@ -28,7 +39,67 @@ export async function click({ by, value }) {
   return { success: true, clicked: result };
 }
 
-export async function openPanel({ panel, action }) {
+// Self-contained so the same operation can run in TradingView and in a DOM
+// fixture. Use the application's transitions, never guess setMode values.
+export async function strategyTesterPanelInPage(action = 'state') {
+  const bar = window.TradingView?.bottomWidgetBar;
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect(), style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const read = () => {
+    const bottom = document.querySelector('[class*="layout__area--bottom"]');
+    const root = document.querySelector('.bottom-widgetbar-content.backtesting')
+      || document.querySelector('[class*="backtestingReport"]')
+      || document.querySelector('[data-name="backtesting"]')
+      || document.querySelector('[class*="strategyReport"]');
+    const height = bottom?.getBoundingClientRect().height || 0;
+    const active = bar?.activeWidget?.().value() ?? null;
+    return { available: !!bar, mode: bar?.mode?.().value() ?? null, active, height,
+      open: height > 50 && visible(bottom) && visible(root) && (!active || active === 'backtesting') };
+  };
+  const before = read();
+  if (action === 'state') return before;
+  if (!['open', 'close', 'toggle'].includes(action)) throw new Error('Invalid panel action: ' + action);
+  if (!bar) throw new Error('bottomWidgetBar not available');
+  const wantOpen = action === 'open' || (action === 'toggle' && !before.open);
+  let performed = wantOpen ? 'already_open' : 'already_closed';
+  // Recover the invalid state written by older chart-proof versions without
+  // touching any strategy, input or other panel.
+  if (before.mode === 'collapsed' && before.active === 'backtesting' && typeof bar.close === 'function') bar.close();
+  if (wantOpen && !before.open) {
+    if (typeof bar.showWidget !== 'function') throw new Error('Strategy Tester activation unavailable');
+    await bar.showWidget('backtesting');
+    if (typeof bar.open === 'function') bar.open();
+    performed = 'opened';
+  } else if (!wantOpen && before.open) {
+    if (typeof bar.close === 'function') { bar.close(); performed = 'closed'; }
+    else if (typeof bar.hideWidget === 'function') { await bar.hideWidget('backtesting'); performed = 'closed'; }
+    else {
+      const button = document.querySelector('[data-name="toggle-visibility-button"][aria-label*="折叠"], [data-name="toggle-visibility-button"][aria-label*="Collapse"], [data-name="toggle-visibility-button"][aria-label*="Hide"]');
+      if (visible(button)) { button.click(); performed = 'collapsed_via_panel_button'; }
+    }
+  }
+  return { before, wantOpen, performed };
+}
+
+export async function openPanel({ panel, action, _deps = {} }) {
+  if (panel === 'strategy-tester') {
+    const run = _deps.evaluate || evaluate;
+    const pause = _deps.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const operation = await run(`(${strategyTesterPanelInPage.toString()})(${JSON.stringify(action)})`, { awaitPromise: true });
+    let observed;
+    // Poll only observations; an API acknowledgement is not visual proof.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      observed = await run(`(${strategyTesterPanelInPage.toString()})('state')`, { awaitPromise: true });
+      if (observed.available && observed.open === operation.wantOpen) {
+        return { success: true, panel, action, was_open: operation.before.open, performed: operation.performed, observed };
+      }
+      if (attempt < 11) await pause(100);
+    }
+    throw new Error(`PANEL_STATE_MISMATCH: ${JSON.stringify({ panel, action, observed })}`);
+  }
   const isBottomPanel = panel === 'pine-editor' || panel === 'strategy-tester';
   if (isBottomPanel) {
     const widgetName = panel === 'pine-editor' ? 'pine-editor' : 'backtesting';
@@ -56,6 +127,59 @@ export async function openPanel({ panel, action }) {
       })()
     `);
     if (result && result.error) throw new Error(result.error);
+
+    // TradingView Desktop currently exposes Pine as a right-side dialog on
+    // fresh tabs, while older tabs still answer through bottomWidgetBar. Give
+    // the legacy API a chance first, then use the visible Pine control only
+    // when the requested state was not reached. This keeps the action
+    // idempotent and avoids blindly toggling an already-open editor.
+    if (panel === 'pine-editor') {
+      const pineDialogOpen = async () => Boolean(await evaluate(`
+        (function() {
+          var root = document.querySelector('[data-name="pine-dialog"]');
+          var editor = document.querySelector('.monaco-editor.pine-editor-monaco');
+          return !!(root && root.offsetWidth > 0 && root.offsetHeight > 0 && editor && editor.offsetWidth > 0);
+        })()
+      `));
+      await new Promise(resolve => setTimeout(resolve, 700));
+      let open = await pineDialogOpen();
+
+      if (action === 'open' && !open) {
+        const fallback = await evaluate(`
+          (function() {
+            var candidates = document.querySelectorAll('[data-name="pine-dialog-button"], [aria-label="Pine"]');
+            for (var i = 0; i < candidates.length; i++) {
+              var rect = candidates[i].getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                candidates[i].click();
+                return true;
+              }
+            }
+            return false;
+          })()
+        `);
+        if (fallback) {
+          for (let attempt = 0; attempt < 10 && !open; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+            open = await pineDialogOpen();
+          }
+          if (open) result.performed = 'opened_via_side_button';
+        }
+      } else if (action === 'close' && open) {
+        const closed = await evaluate(`
+          (function() {
+            var root = document.querySelector('[data-name="pine-dialog"]');
+            if (!root) return false;
+            var button = root.querySelector('[aria-label="关闭"], [aria-label="Close"], [title="关闭"], [title="Close"]');
+            if (!button) return false;
+            button.click();
+            return true;
+          })()
+        `);
+        if (closed) result.performed = 'closed_via_dialog_button';
+      }
+    }
+
     return { success: true, panel, action, was_open: result?.was_open ?? false, performed: result?.performed ?? 'unknown' };
   } else {
     const selectorMap = {
@@ -134,7 +258,6 @@ export async function layoutSwitch({ name }) {
           if (!charts || !Array.isArray(charts)) { resolve({success: false, error: 'getSavedCharts returned no data', source: 'internal_api'}); return; }
           var match = null;
           for (var i = 0; i < charts.length; i++) { var cname = charts[i].name || charts[i].title || ''; if (cname === target || cname.toLowerCase() === target.toLowerCase()) { match = charts[i]; break; } }
-          if (!match) { for (var j = 0; j < charts.length; j++) { var cn = (charts[j].name || charts[j].title || '').toLowerCase(); if (cn.indexOf(target.toLowerCase()) !== -1) { match = charts[j]; break; } } }
           if (!match) { resolve({success: false, error: 'Layout "' + target + '" not found.', source: 'internal_api'}); return; }
           var chartId = match.id || match.chartId;
           window.TradingViewApi.loadChartFromServer(chartId);

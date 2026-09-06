@@ -5,8 +5,9 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { pathToFileURL } from 'url';
+import { indicatorFamilyLabel, validateIndicatorFamily } from './indicator_taxonomy.mjs';
 
-export const REPORT_TEMPLATE_VERSION = 1;
+export const REPORT_TEMPLATE_VERSION = 2;
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 
@@ -44,6 +45,10 @@ const verdictLabel = (type) => ({
 
 export function buildCaseSummary(d = {}) {
   const rows = Array.isArray(d.robustness?.rows) ? d.robustness.rows.filter(Boolean) : [];
+  const verifiedMarkets = [...new Set(rows
+    .filter((row) => numberValue(row?.strat ?? row?.strategy_pct) != null)
+    .map((row) => marketKey(row.symbol))
+    .filter((symbol) => ['QQQ', 'SPY', 'CSI300'].includes(symbol)))];
   const primaryRow = rows.find((row) => marketKey(row.symbol) === marketKey(d.symbol)) || rows[0] || null;
   const reportStats = d.stats || {};
   const primaryMatchesReport = primaryRow && marketKey(primaryRow.symbol) === marketKey(d.symbol);
@@ -70,6 +75,20 @@ export function buildCaseSummary(d = {}) {
   const dd = numberValue(source.dd ?? source.drawdown ?? source.max_drawdown);
   const pf = numberValue(source.pf ?? source.profit_factor);
   const trades = numberValue(source.trades);
+  const marketResults = (rows.length ? rows : [source]).map((row) => {
+    const isPrimary = marketKey(row.symbol) === marketKey(source.symbol || d.symbol);
+    const result = isPrimary ? { ...row, ...source } : row;
+    return {
+      symbol: marketLabel(result.symbol || d.symbol),
+      range: result.range || '',
+      strategy: numberValue(result.strat ?? result.strategy_pct ?? result.strategy),
+      bh: numberValue(result.bh ?? result.bh_pct),
+      alpha: numberValue(result.alpha ?? result.alpha_pct),
+      dd: numberValue(result.dd ?? result.drawdown ?? result.max_drawdown),
+      pf: numberValue(result.pf ?? result.profit_factor),
+      trades: numberValue(result.trades),
+    };
+  });
   const axes = Array.isArray(d.optimization?.axes) ? d.optimization.axes : [];
   const evaluated = numberValue(d.optimization?.evaluated);
   const researchDepth = d.researchDepth?.label
@@ -84,8 +103,17 @@ export function buildCaseSummary(d = {}) {
     kind: d.card?.kind || d.type || '指标研究',
     status: d.card?.status || verdictLabel(d.verdict?.type),
     principle: d.card?.principle || d.oneLiner || d.explain?.howItWorks || '',
+    family: d.classification?.family || '',
+    familyLabel: indicatorFamilyLabel(d.classification?.family),
+    author: d.identity?.author || '',
+    sourceId: d.identity?.scriptId || '',
     scope,
     researchDepth,
+    verification: {
+      markets: verifiedMarkets.map(marketLabel),
+      marketCount: verifiedMarkets.length,
+      threeMarketVerified: ['QQQ', 'SPY', 'CSI300'].every((symbol) => verifiedMarkets.includes(symbol)),
+    },
     primaryMarket: {
       symbol: marketLabel(source.symbol || d.symbol),
       range: source.range || '',
@@ -96,6 +124,7 @@ export function buildCaseSummary(d = {}) {
       pf,
       trades,
     },
+    marketResults,
     metrics: [
       {
         label: '策略收益',
@@ -171,7 +200,23 @@ export function validateData(d) {
   const errors = [], warnings = [];
   if (!d || typeof d !== 'object') { errors.push('data 必须是 JSON 对象'); return { errors, warnings }; }
   if (typeof d.title !== 'string' || !d.title.trim()) errors.push('缺少必填 title（字符串）');
-  if (!d.partial && (typeof d.source !== 'string' || !d.source.trim())) errors.push('完整报告缺少必填 source（Pine 源码）；诊断报告请显式设置 partial:true');
+  const sourcePolicy = d.sourcePolicy || 'embedded';
+  if (!['embedded', 'reference_only'].includes(sourcePolicy)) {
+    errors.push('sourcePolicy 只能是 embedded / reference_only');
+  }
+  const hasSource = typeof d.source === 'string' && d.source.trim();
+  if (!d.partial && !hasSource && sourcePolicy !== 'reference_only') {
+    errors.push('完整报告缺少必填 source（Pine 源码）；诊断报告请显式设置 partial:true，公开第三方脚本可使用 sourcePolicy:"reference_only"');
+  }
+  if (!d.partial && sourcePolicy === 'reference_only') {
+    const hasPublicIdentity = typeof d.identity?.author === 'string' && d.identity.author.trim()
+      && typeof d.identity?.scriptId === 'string' && d.identity.scriptId.trim();
+    const codeEvidence = Array.isArray(d.explain?.deep?.codeEvidence)
+      ? d.explain.deep.codeEvidence.filter(item => typeof item?.code === 'string' && item.code.trim())
+      : [];
+    if (!hasPublicIdentity) errors.push('sourcePolicy:"reference_only" 必须提供准确的 identity.author 与 identity.scriptId');
+    if (!codeEvidence.length) errors.push('sourcePolicy:"reference_only" 必须提供 explain.deep.codeEvidence[]，展示交易转换核心证据');
+  }
   const blocks = ['stats', 'explain', 'beforeAfter', 'robustness', 'screenshot', 'heatmap', 'optimization', 'validation', 'oos'];
   if (!blocks.some(k => d[k])) errors.push('至少要有一个内容块（stats/explain/beforeAfter/robustness/screenshot/heatmap/optimization/validation/oos）');
   if (d.stats) for (const k of ['ret', 'alpha', 'bh', 'dd', 'pf', 'trades'])
@@ -180,7 +225,26 @@ export function validateData(d) {
     if (d.costs[k] != null && typeof d.costs[k] !== 'string') warnings.push(`costs.${k} 建议为字符串，收到 ${JSON.stringify(d.costs[k])}`);
   if (d.scope != null && typeof d.scope !== 'string') warnings.push(`scope 建议为字符串，收到 ${JSON.stringify(d.scope)}`);
   if (d.card != null && (typeof d.card !== 'object' || Array.isArray(d.card))) warnings.push(`card 建议为对象，收到 ${JSON.stringify(d.card)}`);
+  if (d.classification != null) {
+    if (typeof d.classification !== 'object' || Array.isArray(d.classification)) {
+      errors.push(`classification 应为对象，收到 ${JSON.stringify(d.classification)}`);
+    } else {
+      const family = validateIndicatorFamily(d.classification.family);
+      if (!family.valid) errors.push(`classification.family 只能是 ${family.allowed.join(' / ')}`);
+    }
+  } else if (!d.partial) {
+    warnings.push('完整报告建议提供 classification.family，公开案例目录才能稳定分类');
+  }
+  if (d.identity != null && (typeof d.identity !== 'object' || Array.isArray(d.identity))) {
+    errors.push(`identity 应为对象，收到 ${JSON.stringify(d.identity)}`);
+  }
   if (d.researchDepth != null && (typeof d.researchDepth !== 'object' || Array.isArray(d.researchDepth))) warnings.push(`researchDepth 建议为对象，收到 ${JSON.stringify(d.researchDepth)}`);
+  if (Array.isArray(d.explain?.flow) && d.explain.flow.length) {
+    errors.push('explain.flow 已停用：计算过程写入“深入理解”，确认、入场与退出写入 Strategy Spec，避免重复章节');
+  }
+  if (Array.isArray(d.explain?.timeline) && d.explain.timeline.length) {
+    errors.push('explain.timeline 已停用：时间与状态规则请并入 Strategy Spec');
+  }
   if (d.heatmap) {
     const h = d.heatmap;
     if (!Array.isArray(h.cells) || !h.cells.length) errors.push('heatmap.cells 应为非空数组');
@@ -404,15 +468,6 @@ const modifierHtml = modifiers.length ? `<div class="spec-modifiers"><div class=
   <div class="modifier-row"><div><span class="modifier-name">${esc(i.name || '附加条件')}</span>${i.default ? `<span class="chip warn">默认${esc(i.default)}</span>` : ''}</div><div class="modifier-rule">${esc(i.rule || '')}${i.role ? `<span class="modifier-role">${esc(i.role)}</span>` : ''}</div></div>`).join('')}</div>` : '';
 const strategySpecHtml = (strategySpecRows.length || modifiers.length) ? `<div class="strategy-spec content-group"><div class="sub">Strategy Spec</div><div class="spec-grid">${strategySpecRows.map(({ key, label, value }) => `
   <div class="spec-item spec-${esc(key)}"><div class="spec-label">${esc(label)}</div><div class="spec-value">${esc(value)}</div></div>`).join('')}</div>${modifierHtml}</div>` : '';
-const flow = Array.isArray(ex.flow) ? ex.flow.filter(i => i && (typeof i === 'string' || i.text)) : [];
-const flowHtml = flow.length ? `<div class="seg content-group"><div class="sub">信号形成</div><ol class="signal-flow">${flow.map((step, i) => {
-  const label = typeof step === 'string' ? `步骤 ${i + 1}` : (step.label || `步骤 ${i + 1}`);
-  const value = typeof step === 'string' ? step : step.text;
-  return `<li><span class="flow-label">${esc(label)}</span><span class="flow-text">${esc(value)}</span></li>`;
-}).join('')}</ol></div>` : '';
-const timeline = Array.isArray(ex.timeline) ? ex.timeline.filter(Boolean) : [];
-const timelineHtml = timeline.length ? `<div class="seg content-group"><div class="sub">信号形成</div><ol class="timeline">${timeline.map((step, i) => `
-  <li><span class="timeline-num">${i + 1}</span><span>${esc(step)}</span></li>`).join('')}</ol></div>` : '';
 const optionalFilter = ex.optionalFilter;
 const optionalFilterHtml = optionalFilter ? `<div class="seg optional-filter">
   <div class="optional-filter-head"><span class="sub">可选过滤器</span><span class="chip warn">默认${esc(optionalFilter.default || '关闭')}</span></div>
@@ -455,7 +510,7 @@ const mathConceptHtml = deepEquations.length ? `<div class="math-concept-grid">
   <div class="math-equations"><div class="detail-label">核心公式</div>${equationsHtml}</div>
   <div class="math-variables"><div class="detail-label">符号说明</div>${variablesHtml}</div>
 </div>` : '';
-const usesAdaptiveExplain = readerGuide.length || flow.length || keyParams.length || modifiers.length || Object.keys(deep).length;
+const usesAdaptiveExplain = readerGuide.length || keyParams.length || modifiers.length || Object.keys(deep).length;
 const hasDeep = deep.intuition || deepVariables.length || deepEquations.length || deep.example || deep.formula || deep.derivation
   || ex.example || ex.formula || ex.derivation || paramsList || codeEvidence.length || ex.repaintNote;
 const deepHtml = hasDeep ? `<details class="derive seg deep-detail"${deep.open ? ' open' : ''}><summary><span>深入理解这个指标</span></summary><div class="deep-detail-body">
@@ -474,8 +529,6 @@ const explainPlain = [
   ...readerGuide.map(i => `【${i.label || '关键概念'}】${i.text || ''}`),
   ...strategySpecRows.map(({ label, value }) => `【${label}】${value}`),
   ...modifiers.map(i => `【可选条件】${i.name || ''}${i.default ? `（默认${i.default}）` : ''}：${i.rule || ''}${i.role ? `；${i.role}` : ''}`),
-  flow.length ? '【信号形成】\n' + flow.map((step, i) => `${i + 1}. ${typeof step === 'string' ? step : `${step.label || '步骤'}：${step.text}`}`).join('\n') : '',
-  timeline.length ? '【信号形成】' + timeline.map((step, i) => `${i + 1}. ${step}`).join(' → ') : '',
   optionalFilter ? `【可选过滤器】默认${optionalFilter.default || '关闭'}；${optionalFilter.rule || ''}；${optionalFilter.limitation || ''}` : '',
   ...structuredExplain.map(([label, value]) => `【${label}】${value}`),
   ex.formula ? '【数学原理】\n' + ex.formula : '',
@@ -502,13 +555,11 @@ const explainBlock = Object.keys(ex).length ? `
     <div class="vspace">
       ${ex.howItWorks ? `<p class="para">${esc(ex.howItWorks)}</p>` : ''}
       ${readerGuideHtml}
+      ${deepHtml}
       ${strategySpecHtml}
-      ${flowHtml}
-      ${timelineHtml}
       ${structuredExplainHtml}
       ${optionalFilterHtml}
       ${usageHtml}
-      ${deepHtml}
       ${!usesAdaptiveExplain && (ex.worksWhen || ex.failsWhen) ? `<div class="seg callouts">
         ${ex.worksWhen ? `<div class="co"><div class="co-lab">有效场景</div><div class="co-txt">${esc(ex.worksWhen)}</div></div>` : ''}
         ${ex.failsWhen ? `<div class="co"><div class="co-lab">失效场景</div><div class="co-txt muted">${esc(ex.failsWhen)}</div></div>` : ''}
@@ -921,14 +972,6 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .modifier-name{ font-size:12px; font-weight:600; color:var(--z700); margin-right:8px; }
   .modifier-rule{ font-size:12px; line-height:1.65; color:var(--z600); }
   .modifier-role{ display:block; color:var(--z400); }
-  .signal-flow{ list-style:none; display:flex; flex-direction:column; gap:12px; }
-  .signal-flow li{ display:grid; grid-template-columns:76px 1fr; gap:16px; padding:0; align-items:start; }
-  .signal-flow li + li{ border-top:0; }
-  .flow-label{ font-size:12px; line-height:1.6; font-weight:700; color:var(--z700); }
-  .flow-text{ font-size:13px; line-height:1.65; color:var(--z600); }
-  .timeline{ list-style:none; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; }
-  .timeline li{ min-width:0; font-size:11px; line-height:1.45; color:var(--z600); }
-  .timeline-num{ display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:var(--z100); color:var(--z600); font-size:10px; font-weight:700; margin-bottom:6px; }
   .optional-filter-head{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
   .optional-filter-head .sub{ margin:0; }
   .optional-filter-title{ font-size:13px; font-weight:600; color:var(--z700); }
@@ -961,14 +1004,15 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
   .detail-example-box .detail-label{ margin-top:0; }
   .math-example{ font-family:"STIX Two Math","Cambria Math","Times New Roman",var(--font); font-size:13px; font-variant-numeric:lining-nums; }
   .code-evidence-body{ display:grid; grid-template-columns:1fr; gap:12px; }
-  .code-evidence-item{ min-width:0; margin:0; border-radius:10px; overflow:hidden; background:#fff; }
-  .code-evidence-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; background:#fff; }
+  .code-evidence-item{ min-width:0; margin:0; padding:12px; border-radius:10px; overflow:hidden; background:#fff; }
+  .code-evidence-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 0 10px; background:transparent; }
   .code-evidence-title{ font-size:12px; font-weight:650; color:var(--z700); }
   .code-evidence-lang,.src-hint{ flex:0 0 auto; padding:3px 7px; border-radius:5px; background:var(--z100); font-family:var(--mono); font-size:9px; font-weight:600; letter-spacing:.02em; color:var(--z500); }
-  .code-evidence-code,pre.code{ background:var(--z50); font-family:var(--mono); font-size:11.5px; line-height:1.75; color:var(--z700); tab-size:2; }
-  .code-evidence-code{ margin:0; padding:14px 16px; white-space:pre; overflow-x:auto; }
+  .code-evidence-code,pre.code{ font-family:var(--mono); font-size:11.5px; line-height:1.75; color:var(--z700); tab-size:2; }
+  .code-evidence-code{ margin:0; padding:13px 14px; border-radius:8px; background:var(--z50); box-shadow:inset 0 0 0 1px var(--z100); white-space:pre; overflow-x:auto; }
+  pre.code{ background:var(--z50); }
   .code-evidence-code code{ font:inherit; color:inherit; }
-  .code-evidence-note{ margin:0; padding:10px 12px 11px; font-size:12px; line-height:1.65; color:var(--z500); background:#fff; }
+  .code-evidence-note{ margin:0; padding:10px 0 0; font-size:12px; line-height:1.65; color:var(--z500); background:transparent; }
   .usage-edge{ font-size:13px; line-height:1.65; color:var(--z700); }
   .usage-edge > span,.usage-scenes span{ display:block; font-size:11px; font-weight:600; color:var(--z400); margin-bottom:3px; }
   .usage-params{ margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; }
@@ -1108,10 +1152,6 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     .spec-grid,.usage-params,.usage-scenes,.callouts,.oos-cols{ grid-template-columns:1fr; }
     .spec-observation{ grid-column:auto; }
     .modifier-row{ grid-template-columns:1fr; gap:4px; }
-    .signal-flow li{ grid-template-columns:72px 1fr; gap:12px; }
-    .timeline{ grid-template-columns:1fr; gap:12px; }
-    .timeline li{ display:grid; grid-template-columns:24px 1fr; gap:8px; align-items:start; }
-    .timeline-num{ margin-bottom:0; }
     .sec-h-row{ align-items:flex-start; gap:12px; }
     .bar-row{ gap:8px; }
     .bar-sym{ width:62px; }
@@ -1130,8 +1170,6 @@ const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"/>
     .hone{ font-size:13px; }
     .content-group,.deep-detail-body{ padding:15px var(--page-pad); }
     .reader-guide-row{ grid-template-columns:1fr; gap:3px; }
-    .signal-flow li{ grid-template-columns:1fr; gap:2px; }
-    .flow-label{ color:var(--z700); }
     .code-evidence-head{ align-items:flex-start; }
     .code-evidence-code{ padding:13px 12px; }
     .code-evidence-code,pre.code{ font-size:10.5px; }

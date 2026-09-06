@@ -23,7 +23,15 @@ function emitResult(result) {
 async function getClient() {
   let targets;
   try { targets = await CDP.List(); } catch { throw new Error('CDP not reachable on 9222'); }
-  const chart = targets.find(t => t.url.includes('tradingview.com/chart'));
+  const targetHint = String(process.env.TV_SKILL_CHART_TARGET || '').trim();
+  const chart = targetHint
+    ? targets.find(t => t.type === 'page' && (
+        t.id === targetHint
+        || t.url === targetHint
+        || t.url.includes(`/chart/${targetHint}/`)
+      ))
+    : targets.find(t => t.url.includes('tradingview.com/chart'));
+  if (targetHint && !chart) throw new Error(`Requested TradingView chart target not found: ${targetHint}`);
   if (!chart) throw new Error('No TradingView chart tab');
   return await CDP({ target: chart.webSocketDebuggerUrl });
 }

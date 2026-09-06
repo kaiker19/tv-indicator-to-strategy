@@ -1,0 +1,53 @@
+name: 推荐一个指标
+description: 推荐公开 TradingView 指标，供后续研究和回测
+title: "[指标推荐] "
+labels:
+  - indicator-request
+body:
+  - type: markdown
+    attributes:
+      value: |
+        只需要提供公开指标和你最想确认的问题。这里不要求先生成完整案例。
+
+  - type: input
+    id: indicator_name
+    attributes:
+      label: 指标名称
+      placeholder: 例如 UT Bot Alerts
+    validations:
+      required: true
+
+  - type: input
+    id: author
+    attributes:
+      label: 作者
+      description: 不确定时可以填写“待核对”。
+      placeholder: 例如 QuantNomad
+    validations:
+      required: true
+
+  - type: input
+    id: tradingview_url
+    attributes:
+      label: TradingView 公开链接
+      description: 只填写公开可访问的 tradingview.com 脚本页面。
+      placeholder: https://www.tradingview.com/script/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: research_question
+    attributes:
+      label: 最想确认的问题
+      description: 例如是否重绘、买卖信号怎样形成、哪些参数值得搜索。
+      placeholder: 请写 1—3 个具体问题。
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: 提交确认
+      options:
+        - label: 链接公开可访问，不含账号信息、密钥或私有脚本。
+          required: true

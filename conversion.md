@@ -122,7 +122,7 @@ if strategy.position_size > 0
 2. **入场逻辑**（一句话）
 3. **出场逻辑**（一句话）
 
-同时生成可审阅的规则。自然语言路径保留完整 `Strategy Spec v1` JSON；报告中的 `strategySpec` 是其简明映射，至少记录 `entry`、`exit`、`position`、`execution`、`costs`、`exclusions`。策略转换时新增、且默认不启用的确认条件写入 `modifiers[]`，并明确 `default`、`rule`、`role`；不要把它混写成原指标必需规则。对应操作流程不靠回测截图保存，而由 Strategy Spec + `explain.flow[]` 留存，回测结果只作为这套规则的一次验证证据。
+同时生成可审阅的规则。自然语言路径保留完整 `Strategy Spec v1` JSON；报告中的 `strategySpec` 是其简明映射，至少记录 `observation`、`entry`、`exit`、`position`、`execution`、`costs`、`exclusions`。策略转换时新增、且默认不启用的确认条件写入 `modifiers[]`，并明确 `default`、`rule`、`role`；不要把它混写成原指标必需规则。候选、确认、失效与交易动作都由 Strategy Spec 留存，不另生成重复的流程块；回测结果只作为这套规则的一次验证证据。
 
 ## 注意事项
 

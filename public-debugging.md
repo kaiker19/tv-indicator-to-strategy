@@ -67,6 +67,12 @@
 
 ## 页面结构变化
 
+### 回测数据存在，但面板没有展开
+
+策略图 proof 为了突出通道和买卖标记，会主动收起回测面板；这本身不是回测失败。需要查看统计时，调用公开 `core/ui.js` 的 `openPanel({ panel: 'strategy-tester', action: 'open' })`，以返回的 `observed.open` 和实际画面确认结果，不把 DOM 中存在数字当作面板可见。
+
+旧预览包曾把面板写入无效 `collapsed` 状态，导致按钮无法切换。当前引擎通过 TradingView 自身的收起/展开方法处理该状态，不猜测内部状态名。若仍报 `PANEL_STATE_MISMATCH`，保留 mode、active、height 与截图，按同一动作最多重试一次的预算停止；不需要重新注入策略或重跑已有回测。
+
 TradingView 界面变化导致自动化定位失败时，先运行探针并保存可见状态。不要凭旧坐标继续操作。若当前公开引擎无法识别新结构，停止写入并输出最小复现信息。
 
 完整流程见 [公开版运行手册](public-runbook.md)，命令说明见 [引擎 CLI](engine-cli.md)。

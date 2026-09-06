@@ -92,6 +92,16 @@ export async function connect() {
 async function findChartTarget() {
   const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
   const targets = await resp.json();
+  const targetHint = String(process.env.TV_SKILL_CHART_TARGET || '').trim();
+  if (targetHint) {
+    const selected = targets.find(t => t.type === 'page' && (
+      t.id === targetHint
+      || t.url === targetHint
+      || t.url.includes(`/chart/${targetHint}/`)
+    ));
+    if (!selected) throw new Error(`Requested TradingView chart target not found: ${targetHint}`);
+    return selected;
+  }
   // Prefer targets with tradingview.com/chart in the URL
   return targets.find(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
     || targets.find(t => t.type === 'page' && /tradingview/i.test(t.url))

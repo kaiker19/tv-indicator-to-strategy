@@ -1,6 +1,6 @@
 {
   "name": "tv-indicator-to-strategy-engine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "TradingView 指标转策略 + 自动注入回测 + 参数调优引擎（CDP 驱动 TV Desktop）",

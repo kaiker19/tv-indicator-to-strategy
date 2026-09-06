@@ -1,0 +1,63 @@
+name: 提交完整研究案例
+description: 上传由本项目模板生成的单个指标案例，进入审核
+title: "[完整案例] "
+labels:
+  - case-submission
+body:
+  - type: markdown
+    attributes:
+      value: |
+        已经生成了完整案例时，可以把案例 HTML 直接拖到下面；若当前入口不接受 HTML，请先打成 ZIP。若同时保留了 `report-data.json` 和回测截图，也请一并附上，复核会更快。
+
+        如果案例由本项目 Skill 生成，可以先让 Agent 检查材料并列出待上传文件；最后由你核对公开内容并提交。
+
+        附件上传时即会发送到 GitHub，不等到点击提交才上传；请先确认材料可以公开。投稿文件只作为审核材料，不会直接部署或执行；通过审核后，页面会由受信任版本的固定模板重新生成。
+
+  - type: input
+    id: indicator_name
+    attributes:
+      label: 指标名称
+      placeholder: 例如 Nadaraya-Watson Envelope [LuxAlgo]
+    validations:
+      required: true
+
+  - type: input
+    id: author
+    attributes:
+      label: 原指标作者
+      description: 不确定时可以填写“待核对”。
+      placeholder: 例如 LuxAlgo
+    validations:
+      required: true
+
+  - type: input
+    id: tradingview_url
+    attributes:
+      label: TradingView 公开来源
+      description: 有公开脚本页面时请填写，方便核对名称、作者和源码身份。
+      placeholder: https://www.tradingview.com/script/...
+
+  - type: textarea
+    id: case_files
+    attributes:
+      label: 案例文件
+      description: 把生成的 HTML 拖到这里；推荐同时附上 report-data.json 和干净的回测截图。不要上传 Cookie、令牌、私有脚本或带本机隐私的截图。
+      placeholder: 将 .html、.json、.png 或打包后的 .zip 拖到这里。图片不超过 10 MB，其他文件不超过 25 MB。
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 补充说明（可选）
+      description: 可以说明生成工具版本、你最希望复核的结论，或当前已知限制。
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: 提交确认
+      options:
+        - label: 原指标和提交材料均可公开，不含账号信息、密钥、私有源码或其他敏感数据。
+          required: true
+        - label: 我理解附件不会直接发布到网站；维护者会审核，并用固定模板重新生成页面。
+          required: true

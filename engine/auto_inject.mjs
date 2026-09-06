@@ -15,11 +15,11 @@ import { buildHeatmapSlice } from './heatmap.mjs';
 import { buildEpisodeAudit } from './episode_audit.mjs';
 import { patchStrategyCosts } from './costs.mjs';
 import {
-  findDiscardUnsavedChangesButtonExpression,
   findPineApplyButtonExpression,
   findSaveBeforeAddButtonExpression,
   findSaveScriptNamingDialogExpression,
 } from './dialogs.mjs';
+import { assessPineEditorSlot } from './pine_slot_guard.mjs';
 import { buildScanSummary, scanObjectiveFromMetrics } from './scan_summary.mjs';
 import { buildCoarseGrid, buildOptimizationSummary, planLocalRefinement, resolveOptimizationBudget } from './optimizer.mjs';
 import { buildOosSummary } from './oos.mjs';
@@ -274,7 +274,11 @@ async function getChartClient() {
   let targets;
   try { targets = await CDP.List(); }
   catch (e) { throw new Error('CDP not reachable on 9222. Launch TV with TVD_DEBUGMODE=true ... --remote-debugging-port=9222'); }
-  let chart = targets.find(t => t.url.includes('tradingview.com/chart'));
+  const targetHint = String(process.env.TV_SKILL_CHART_TARGET || '').trim();
+  let chart = targetHint
+    ? targets.find(t => t.id === targetHint || t.url === targetHint || t.url.includes(`/chart/${targetHint}/`))
+    : targets.find(t => t.url.includes('tradingview.com/chart'));
+  if (targetHint && !chart) throw new Error(`Requested TradingView chart target not found: ${targetHint}`);
   const errTab = targets.find(t => t.url.includes('error-view'));
   if (!chart && errTab) {
     log('  recovering from error-view tab...');
@@ -300,7 +304,7 @@ async function dismissModalIfAny(client) {
   await probe(client, `(function(){
     var dlg = Array.from(document.querySelectorAll('[class*=popupDialog],[role=dialog]')).find(d=>d.offsetWidth>0);
     if (!dlg) return false;
-    var btn = dlg.querySelector('[data-name=close]') || Array.from(dlg.querySelectorAll('button')).find(b=>['关闭','Cancel','取消'].includes(b.textContent.trim()));
+    var btn = dlg.querySelector('[data-name=close]') || dlg.querySelector('button[class*=close-]') || Array.from(dlg.querySelectorAll('button')).find(b=>['关闭','Close','Cancel','取消'].includes(b.textContent.trim()));
     if (btn) btn.click();
     return true;
   })()`);
@@ -383,46 +387,49 @@ async function forceFreshStrategySlot(client) {
   })()`);
   const pollCoords = async (reSrc, tries) => { for (let i=0;i<tries;i++){ const c=await coordsOf(reSrc); if(c)return c; await sleep(500); } return null; };
 
-  // 1. click title button ([class*=nameButton]) center via DOM coords
+  // 1. click the title button's right-side dropdown affordance. In the 2026-08
+  // Pine dialog, clicking the title label itself only focuses the label and does
+  // not open the menu; the trailing icon does.
   // Polling 等 title button DOM 渲染（冷启动场景下可能要 3-5s）
   let titleXY = null;
   for (let i = 0; i < 20; i++) {
-    titleXY = await probe(client, `(function(){var el=document.querySelector('[data-name=pine-dialog] [class*=nameButton]')||document.querySelector('[class*=nameButton]');if(!el)return null;var r=el.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)};})()`);
+    titleXY = await probe(client, `(function(){
+      var root=document.querySelector('[data-name=pine-dialog]');
+      var el=(root&&root.querySelector('[data-qa-id="pine-script-title-button"]'))||(root&&root.querySelector('[class*=nameButton]'))||document.querySelector('[data-qa-id="pine-script-title-button"]')||document.querySelector('[class*=nameButton]');
+      if(!el)return null;
+      var icons=Array.from(el.querySelectorAll('[role=img]')).filter(function(x){var r=x.getBoundingClientRect();return r.width>0&&r.height>0;});
+      var target=icons.length?icons[icons.length-1]:el;
+      var r=target.getBoundingClientRect();
+      return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)};
+    })()`);
     if (titleXY) break;
     await sleep(500);
   }
-  if (!titleXY) { log('  WARN: title button not found after 10s polling, skip force-fresh'); return; }
+  if (!titleXY) { log('  WARN: title button not found after 10s polling'); return { created: false, reason: 'title_not_found' }; }
   await click(titleXY.x, titleXY.y);
 
   // 2. 轮询等 "创建新的" 菜单出现（A2: 旧 sleep(1200) 在冷启动菜单渲染慢时漏点 → 整条 transient FATAL）
   //    多语言：创建新的 / Create New
   const cn = await pollCoords('^创建新的$|^Create New$', 16);   // 轮询 ~8s
-  if (!cn) { log('  WARN: 创建新的 menu not found after 8s, skip force-fresh'); return; }
+  if (!cn) { log('  WARN: 创建新的 menu not found after 8s'); return { created: false, reason: 'create_menu_not_found' }; }
   await hover(cn.x, cn.y);
 
   // 3. 轮询等子菜单 "策略" 出现，再点（多语言：策略 / Strategy）
   const ce = await pollCoords('^策略$|^Strategy$', 10);        // 轮询 ~5s
-  if (!ce) { log('  WARN: 策略 submenu not found, skip force-fresh'); return; }
+  if (!ce) { log('  WARN: 策略 submenu not found'); return { created: false, reason: 'strategy_submenu_not_found' }; }
   await click(ce.x, ce.y);
   await sleep(2000);
 
-  // 4. 处理"当前脚本有未保存更改" → 点不保存/Don't save 创建新槽
+  // 4. Never discard an existing script's unsaved changes. The caller stops and
+  // lets the user decide whether to save or discard before retrying.
   const dlg = await probe(client, `!!Array.from(document.querySelectorAll('[class*=popupDialog],[role=dialog]')).find(d=>d.offsetWidth>0 && /未保存的更改|未保存更改|您想保存|unsaved changes|Do you want to save/i.test(d.textContent))`);
   if (dlg) {
-    const discardButton = findDiscardUnsavedChangesButtonExpression();
-    const discardLabel = await probe(client, `(function(){
-      var btn=${discardButton};
-      if(!btn)return null;
-      var label=(btn.textContent || btn.getAttribute('title') || btn.getAttribute('aria-label') || 'discard').trim();
-      btn.click();
-      return label;
-    })()`);
-    if (discardLabel) log(`  unsaved-changes confirm → click ${discardLabel} (discard)`);
-    else log('  WARN: unsaved-changes confirm present but discard button not found');
-    await sleep(3000);
+    log('  current Pine script has unsaved changes; stop before replacing it');
+    return { created: false, reason: 'unsaved_changes', unsavedPrompt: true };
   }
   const newTitle = await probe(client, `document.querySelector('[class*=nameButton]')?.textContent?.trim()`);
   log(`  new title: "${newTitle}"`);
+  return { created: /^(无标题|Untitled)/i.test(String(newTitle || '').trim()), title: newTitle || null };
 }
 
 async function ensureEditableEditor(client) {
@@ -463,7 +470,14 @@ async function injectSource(client) {
   await ui.openPanel({panel:'pine-editor', action:'open'});
   await sleep(2500);
   await ensureEditableEditor(client);
-  await forceFreshStrategySlot(client);
+  const slot = await forceFreshStrategySlot(client);
+  const currentTitle = await probe(client, `document.querySelector('[class*=nameButton]')?.textContent?.trim()`);
+  const slotDecision = assessPineEditorSlot({
+    title: currentTitle,
+    strategyName: scriptName,
+    unsavedPrompt: slot?.unsavedPrompt === true,
+  });
+  if (!slotDecision.safe) throw new Error(`${slotDecision.code}: ${slotDecision.message}`);
   log(`inject code (${code.split('\n').length} lines, tag=${tag})`);
   let lastErr;
   for (let i = 0; i < 6; i++) {
@@ -995,7 +1009,13 @@ async function readAvgWinLoss(client) {
 async function navigateOverviewTab(client) {
   // 确保 readMetrics 之前 Strategy Tester 在 Overview tab（主 KPI 卡片只在 Overview 上显示）
   return await probe(client, `(function(){
-    var tabs = Array.from(document.querySelectorAll('[role=tab]')).filter(function(t){return t.offsetWidth>0;});
+    var root = document.querySelector('.bottom-widgetbar-content.backtesting') || document.querySelector('[class*=backtestingReport]') || document;
+    var iconTab = root.querySelector('[data-name="light-tab-0"]');
+    if (iconTab && iconTab.offsetWidth > 0) {
+      iconTab.click();
+      return {found:true, label:'overview_icon'};
+    }
+    var tabs = Array.from(root.querySelectorAll('[role=tab]')).filter(function(t){return t.offsetWidth>0;});
     var ov = tabs.find(function(t){var x = t.textContent.trim(); return x === 'Overview' || x === '概览' || x === '概述';});
     if (!ov) return {found: false};
     ov.click();
@@ -1090,6 +1110,7 @@ async function snapshot(client, path) {
 }
 
 async function prepareProofScreenshot(client) {
+  await dismissModalIfAny(client);
   try { await ui.openPanel({panel:'pine-editor', action:'close'}); } catch {}
   await probe(client, `(function(){
     var root = document.querySelector('[data-name="pine-dialog"]');
@@ -1116,6 +1137,40 @@ async function prepareProofScreenshot(client) {
   await sleep(500);
 }
 
+async function prepareChartProofView(client) {
+  await ui.openPanel({panel:'strategy-tester', action:'close'});
+
+  const state = await chart.getState();
+  const series = await chart.getSeriesTimeRange();
+  if (!state?.symbol || !series?.success || !Number.isFinite(Number(series.to))) {
+    throw new Error('PROOF_VIEW_RANGE_UNAVAILABLE: chart series range is missing');
+  }
+  const resolution = String(state.resolution || 'D');
+  let secondsPerBar = 86_400;
+  if (/^\d+$/.test(resolution)) secondsPerBar = Number(resolution) * 60;
+  else if (/^(W|1W)$/i.test(resolution)) secondsPerBar = 7 * 86_400;
+  else if (/^(M|1M)$/i.test(resolution)) secondsPerBar = 30 * 86_400;
+  const to = Number(series.to);
+  const from = Math.max(Number(series.from || 0), to - secondsPerBar * 520);
+  const visible = await chart.setVisibleRange({ from, to });
+  await sleep(1200);
+
+  const uiState = await probe(client, `(function(){
+    var modal = Array.from(document.querySelectorAll('[role=dialog]')).some(function(d){var r=d.getBoundingClientRect();return r.width>0&&r.height>0;});
+    var bottom = document.querySelector('[class*="layout__area--bottom"]');
+    var chartArea = document.querySelector('[class*="chart-container"]') || document.querySelector('[class*="layout__area--center"]');
+    var rect = chartArea ? chartArea.getBoundingClientRect() : null;
+    return {visibilityState:document.visibilityState,modal:modal,bottomOpen:!!(bottom&&bottom.offsetHeight>50),chartHeight:rect?Math.round(rect.height):0};
+  })()`);
+  if (uiState?.visibilityState !== 'visible') {
+    throw new Error(`PROOF_VIEW_HIDDEN: ${JSON.stringify(uiState)}`);
+  }
+  if (uiState?.modal || uiState?.bottomOpen || Number(uiState?.chartHeight || 0) < 300) {
+    throw new Error(`PROOF_VIEW_OBSCURED: ${JSON.stringify(uiState)}`);
+  }
+  return { resolution, requested: { from, to }, actual: visible?.actual || null, ui: uiState };
+}
+
 async function verifyLiveProofContext(client, expectedParams = proofExpectedParams) {
   currentStage = 'proof_context';
   const state = await chart.getState();
@@ -1137,9 +1192,11 @@ async function verifyLiveProofContext(client, expectedParams = proofExpectedPara
 async function captureProof(client, expectedParams = proofExpectedParams) {
   await prepareProofScreenshot(client);
   await verifyLiveProofContext(client, expectedParams);
+  const visual = await prepareChartProofView(client);
+  runManifest.proof.visual = visual;
   await snapshot(client, PROOF_PNG);
   completeStage(runManifest, 'proof_screenshot', {
-    evidence: { symbol: primarySymbol, strategyName: scriptName },
+    evidence: { symbol: primarySymbol, strategyName: scriptName, visual },
     artifacts: { proofScreenshot: PROOF_PNG },
   });
   writeRunManifest();
