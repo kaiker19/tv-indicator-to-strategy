@@ -1,5 +1,10 @@
 const FAILURE_RULES = [
   {
+    pattern: /SOURCE_READBACK_MISMATCH/i,
+    code: 'SOURCE_READBACK_MISMATCH', severity: 'fatal', retryable: false,
+    recommendedAction: '停止生成报告，核对当前 Pine 完整源码与本次请求；不得用策略名称或旧源码摘要替代最终回读。',
+  },
+  {
     pattern: /CDP not reachable|ECONNREFUSED.*9222|fetch failed/i,
     code: 'CDP_UNREACHABLE', severity: 'user_action', retryable: false,
     recommendedAction: '运行 tv_probe；若 TradingView 正常但仍失败，在沙箱外验证 9222，必要时按 SETUP.md 重新启动。',

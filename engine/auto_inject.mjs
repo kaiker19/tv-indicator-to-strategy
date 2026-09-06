@@ -36,7 +36,7 @@ import {
 import { buildRunSummary } from './run_summary.mjs';
 import { classifyEvaluation, normalizeContext, normalizeRange } from './evaluation_contract.mjs';
 import { parseRangeText, rangeFromAllowlistedReport, rangeFromChartSeries } from './range_evidence.mjs';
-import { buildStudyRecord, evaluateReuse, sourceDigest } from './reuse_guard.mjs';
+import { buildStudyRecord, evaluateReuse, sourceDigest, verifySourceReadback } from './reuse_guard.mjs';
 import { resolveStateDir } from './state_paths.mjs';
 import {
   buildInputTitleMap,
@@ -1174,10 +1174,14 @@ async function prepareChartProofView(client) {
 async function verifyLiveProofContext(client, expectedParams = proofExpectedParams) {
   currentStage = 'proof_context';
   const state = await chart.getState();
+  const target = (state.studies || []).find(study => study.name === scriptName);
+  if (!target) throw new Error(`SOURCE_INPUT_MISMATCH: target strategy missing at proof`);
+  const live = await data.getIndicator({ entity_id: target.id });
+  const verifiedParams = verifySourceInputValues({ pineSource: rawCode, expected: expectedParams || {}, actualInputs: live.inputs });
   const actual = {
     symbol: state.symbol || null,
     strategyName: await resolveCurrentStrategyName(client),
-    params: lastAppliedInputs,
+    params: verifiedParams,
   };
   const expected = { symbol: primarySymbol, strategyName: scriptName, params: expectedParams || {} };
   const result = verifyProofContext({ expected, actual });
@@ -1190,6 +1194,12 @@ async function verifyLiveProofContext(client, expectedParams = proofExpectedPara
 }
 
 async function captureProof(client, expectedParams = proofExpectedParams) {
+  currentStage = 'source_readback';
+  const source = await pine.getSource();
+  const readback = verifySourceReadback(costPatch.code, source.source);
+  if (!readback.ok) throw new Error('SOURCE_READBACK_MISMATCH: final editor source differs from requested strategy');
+  completeStage(runManifest, 'source_readback', { evidence: { sourceDigest: strategyDigest, normalizedDigest: readback.actualDigest, lines: source.line_count, verified: true } });
+  writeRunManifest();
   await prepareProofScreenshot(client);
   await verifyLiveProofContext(client, expectedParams);
   const visual = await prepareChartProofView(client);
@@ -1296,9 +1306,8 @@ async function applyStrategyInputs(client, inputsOverride) {
   }
   const state = await chart.getState();
   const studies = state.studies || [];
-  if (!studies.length) { log('  WARN: no studies on chart, skip applyStrategyInputs'); return; }
-  // 优先按名字定位本策略（reuse 下图上可能有别的 study，不能盲取最后一个）；找不到退到最后一个
-  const target = studies.find(s => s.name === scriptName) || studies[studies.length - 1];
+  const target = studies.find(s => s.name === scriptName);
+  if (!target) throw new Error(`INPUT_UPDATE_MISMATCH: target strategy not found: ${scriptName}`);
   log(`apply inputs to "${target.name}" (${target.id})`);
 
   // title → in_N 映射，用户可用 friendly name（如 "Oversold"）或直接 in_N
@@ -1316,14 +1325,14 @@ async function applyStrategyInputs(client, inputsOverride) {
   }
   try {
     const r = await indicators.setInputs({ entity_id: target.id, inputs: remapped });
-    log(`  updated (${r.input_source || 'study_api'}): ${JSON.stringify(r.updated_inputs)}`);
+    log(`  inputs verified (${r.input_source}, recalculated=${r.recalculated}): ${JSON.stringify(r.verified_inputs)}`);
     const unmatched = Object.keys(remapped).filter(k => !(k in (r.updated_inputs || {})));
     if (unmatched.length) throw new Error(`INPUT_UPDATE_MISMATCH: ${unmatched.join(', ')}`);
     if (!unmatched.length) lastAppliedInputs = mergeProvenInputs(verifiedSourceInputs, inputs);
   } catch (e) {
     throw new Error(`setInputs failed: ${e.message}`);
   }
-  await sleep(3000); // 等 strategy 重算
+  // setInputs resolves only after input readback and the new completed report.
 }
 
 let _dumpedKpi = false;
@@ -1506,8 +1515,8 @@ function parseNum(str) {
 }
 
 const OBJECTIVE_LABELS = {
-  risk_adjusted: '净收益/最大回撤',
-  net_pnl: '净收益',
+  risk_adjusted: '总收益/最大回撤',
+  net_pnl: '总收益',
   profit_factor: '盈利因子',
   alpha: 'alpha(跑赢B&H)',
   win_rate_confidence: '胜率置信下界',
@@ -1534,7 +1543,9 @@ function robustnessSummary(runs) {
              alpha_pct: alpha, trades: m.total_trades, profit_factor: m.profit_factor };
   });
   const beat = rows.filter(r => r.alpha_pct != null && r.alpha_pct > 0).length;
-  return { beat_bh: `${beat}/${rows.length}`, rows };
+  const comparable = ['comparable', 'single_run'].includes(evaluationSummary?.comparisonStatus);
+  return { beat_bh: comparable ? `${beat}/${rows.length}` : null,
+    comparisonStatus: evaluationSummary?.comparisonStatus || 'unverified', rows };
 }
 
 function scanObjective(metrics) {
@@ -1616,6 +1627,7 @@ async function scanOneCombo(client, combo, sym, label) {
   }
   const row = { ts: new Date().toISOString(), symbol: sym, params: combo,
     net_pnl: metrics.total_pnl, max_drawdown: metrics.max_drawdown,
+    return_basis: metrics.return_basis, closed_pnl: metrics.closed_pnl, open_pnl: metrics.open_pnl,
     total_trades: metrics.total_trades, profit_factor: metrics.profit_factor,
     win_pct: metrics.win_pct, winning_trades: metrics.winning_trades,
     buy_hold_return: metrics.buy_hold_return,
@@ -1796,7 +1808,7 @@ async function runOptimize(client) {
       runs.push(await collectRun(client, target));
     }
     const robust = robustnessSummary(runs);
-    summary.validation = summarizeValidationRows(robust.rows.map(r => ({ ...r, benchmarkSource: r.error ? null : 'run_benchmarking' })));
+    summary.validation = summarizeValidationRows(robust.rows.map(r => ({ ...r, benchmarkSource: r.error ? null : 'run_benchmarking' })), { evaluation: evaluationSummary });
     flags.inputs = originalInputs;
   }
 
@@ -2027,12 +2039,7 @@ async function main() {
   }
   await captureProof(client, mergeProvenInputs(flags.sourceInputs, flags.inputs));
   await cleanupAppliedStudy(client);
-  try {
-    const src = await pine.getSource();
-    log(`tag in source: ${src.source.includes(tag)} (${src.line_count} lines)`);
-  } catch (e) {
-    log(`tag verify skipped: ${e.message}`);
-  }
+  log('source readback and final parameters verified before proof');
   await client.close();
   log('done.');
 }

@@ -196,6 +196,20 @@ function evaluationView(data = {}, alpha = null) {
   };
 }
 
+function verifiedMarketRows(block = {}, evaluation) {
+  return (block.rows || []).filter(row => {
+    const status = row.comparisonStatus || (row.evaluation || block.evaluation || evaluation)?.comparisonStatus;
+    return ['comparable', 'single_run'].includes(status) && numberValue(row.alpha ?? row.alpha_pct) != null;
+  });
+}
+
+function marketComparisonLabel(block, evaluation) {
+  const rows = verifiedMarketRows(block, evaluation);
+  if (!rows.length) return '基准比较待验证';
+  const wins = rows.filter(row => numberValue(row.alpha ?? row.alpha_pct) > 0).length;
+  return `${wins} / ${rows.length} 个已核对市场跑赢基准`;
+}
+
 export function validateData(d) {
   const errors = [], warnings = [];
   if (!d || typeof d !== 'object') { errors.push('data 必须是 JSON 对象'); return { errors, warnings }; }
@@ -306,7 +320,7 @@ export function buildShareCard(d) {
   ].filter(Boolean) : [];
   const researchDepth = typeof d.researchDepth === 'string' ? d.researchDepth : d.researchDepth?.label;
   const trustItems = [
-    d.robustness?.beatBh ? { label: '多市场验证', value: `跑赢 ${esc(d.robustness.beatBh)}` } : null,
+    d.robustness ? { label: '多市场验证', value: esc(marketComparisonLabel(d.robustness, d.evaluation)) } : null,
     researchDepth ? { label: '研究深度', value: esc(researchDepth) } : null,
     st.trades != null ? { label: '样本量', value: `${esc(st.trades)} 笔交易` } : null,
     costItems.length ? { label: '回测成本', value: costItems.join(' · ') } : null,
@@ -625,23 +639,24 @@ if (d.robustness && Array.isArray(d.robustness.rows)) {
   const alphaOf = (r) => r.alpha ?? r.alpha_pct;
   const stratOf = (r) => r.strat ?? r.strategy_pct;
   const bhOf = (r) => r.bh ?? r.bh_pct;
-  const barsHtml = renderAlphaBars(R);
+  const verified = verifiedMarketRows(d.robustness, d.evaluation);
+  const barsHtml = renderAlphaBars(verified);
   const rows = R.map(r => `
       <tr>
         <td class="sym">${esc(marketLabel(r.symbol))}${r.range ? `<small class="market-range">${esc(r.range)}</small>` : ''}</td>
         <td class="${sgn(stratOf(r))}">${pct(stratOf(r))}</td>
         <td class="muted">${pct(bhOf(r))}</td>
-        <td class="${sgn(alphaOf(r))} big">${pct(alphaOf(r))}</td>
+        <td class="${verified.includes(r) ? sgn(alphaOf(r)) : 'muted'} big">${verified.includes(r) ? pct(alphaOf(r)) : '—'}</td>
         <td class="muted">${esc(r.trades ?? '—')}${r.pf != null ? `<small class="market-range">PF ${esc(num(r.pf).toFixed(2))}</small>` : ''}</td>
-        <td>${num(alphaOf(r)) > 0 ? '<span class="chip ok sm">赢</span>' : '<span class="chip dstr sm">输</span>'}</td>
+        <td>${!verified.includes(r) ? '<span class="chip sm">待验证</span>' : num(alphaOf(r)) > 0 ? '<span class="chip ok sm">跑赢基准</span>' : '<span class="chip dstr sm">未跑赢</span>'}</td>
       </tr>`).join('');
   robustBlock = `
   <section>
-    <div class="sec-h-row"><h2 class="sec-h nomb">同参三市场验证</h2><span class="beat">跑赢 ${esc(d.robustness.beatBh || '')}</span></div>
-    <div class="barwrap">
+    <div class="sec-h-row"><h2 class="sec-h nomb">同参三市场验证</h2><span class="beat">${esc(marketComparisonLabel(d.robustness, d.evaluation))}</span></div>
+    ${verified.length ? `<div class="barwrap">
       <div class="chart-cap">各市场超额收益 α（&gt;0 才跑赢 B&amp;H；红条 = 未跑赢）</div>
       <div class="barchart">${barsHtml}</div>
-    </div>
+    </div>` : ''}
     <div class="table-scroll"><table class="grid">
       <thead><tr><th>市场</th><th>策略</th><th>B&amp;H</th><th>α</th><th>交易</th><th>结果</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -798,7 +813,8 @@ const validationBlock = (() => {
       && sameNumber(row.trades, robust.trades);
   });
   if (duplicatesRobustness) return '';
-  const barsHtml = renderAlphaBars(rows);
+  const verified = verifiedMarketRows(v, d.evaluation);
+  const barsHtml = renderAlphaBars(verified);
   const tableRows = rows.length ? rows.map(r => {
     const alpha = r.alpha ?? r.alpha_pct;
     const strategy = r.strategy ?? r.strategy_pct ?? r.ret;
@@ -808,16 +824,16 @@ const validationBlock = (() => {
         <td class="sym">${esc(marketLabel(r.symbol))}</td>
         <td class="${sgn(strategy)}">${pct(strategy)}</td>
         <td class="muted">${pct(bh)}</td>
-        <td class="${sgn(alpha)} big">${pct(alpha)}</td>
+        <td class="${verified.includes(r) ? sgn(alpha) : 'muted'} big">${verified.includes(r) ? pct(alpha) : '—'}</td>
         <td class="muted">${esc(r.trades ?? '—')}</td>
-        <td>${alpha > 0 ? '<span class="chip ok sm">赢</span>' : '<span class="chip dstr sm">输</span>'}</td>
+        <td>${!verified.includes(r) ? '<span class="chip sm">待验证</span>' : alpha > 0 ? '<span class="chip ok sm">跑赢基准</span>' : '<span class="chip dstr sm">未跑赢</span>'}</td>
       </tr>`;
   }).join('') : '<tr><td colspan="6" class="muted">暂无验证行。</td></tr>';
   return `
   <section>
-    <div class="sec-h-row"><h2 class="sec-h nomb">P2 验证</h2><span class="beat">跑赢 ${esc(v.beatBh || '')}</span></div>
-    ${v.verdict?.label ? `<div class="p2-verdict">${esc(v.verdict.label)}${v.verdict.detail ? '：' + esc(v.verdict.detail) : ''}</div>` : ''}
-    ${rows.length ? `<div class="barwrap"><div class="chart-cap">各市场超额收益 α（红条向左表示落后 B&amp;H）</div><div class="barchart validation-bars">${barsHtml}</div></div>` : ''}
+    <div class="sec-h-row"><h2 class="sec-h nomb">P2 验证</h2><span class="beat">${esc(marketComparisonLabel(v, d.evaluation))}</span></div>
+    ${v.verdict?.label && verified.length === rows.length && verified.length > 0 ? `<div class="p2-verdict">${esc(v.verdict.label)}${v.verdict.detail ? '：' + esc(v.verdict.detail) : ''}</div>` : ''}
+    ${verified.length ? `<div class="barwrap"><div class="chart-cap">各市场超额收益 α（红条向左表示落后 B&amp;H）</div><div class="barchart validation-bars">${barsHtml}</div></div>` : ''}
     <div class="table-scroll"><table class="grid">
       <thead><tr><th>市场</th><th>策略</th><th>B&amp;H</th><th>α</th><th>交易</th><th>结果</th></tr></thead>
       <tbody>${tableRows}</tbody>

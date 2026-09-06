@@ -75,7 +75,7 @@ node "$ENGINE" /tmp/strategy.pine \
 | `--reuse` | 仅在策略名与源码摘要一致时复用当前脚本 |
 | `--cleanup` | 运行后移除策略；默认保留以便用户核对 |
 
-`--input` 的键使用 Pine `input.*` 的标题，不使用 TradingView 内部字段名。若运行时更新 input 需要重新注入，引擎会失败关闭；随后应固化默认值并重新注入，不能沿用旧指标值。
+`--input` 的键使用 Pine `input.*` 的标题，不使用 TradingView 内部字段名。引擎只提交改变的输入，等待计算完成并核对新报告；未取得这些证据时失败关闭。需要重新注入时可固化默认值后重新编译，但必须与动态改参路径分开描述，不能沿用失败格的数据。
 
 `--chart-layout` 是设备本地选项，公开 Skill 不预设名称。若切换时存在未保存修改，引擎停止且不会自动舍弃。若没有专用布局可省略，但最终 proof 必须只显示目标策略、Strategy Tester 和必要价格图；引擎不会为了清理截图自动删除用户已有指标。
 
@@ -116,7 +116,7 @@ node "$ENGINE" /tmp/strategy.pine \
 可用目标：
 
 - `risk_adjusted`：策略收益相对最大回撤，默认；
-- `net_pnl`：策略净收益；
+- `net_pnl`：策略总收益（已平仓净损益加未平仓损益，相对初始资金）；
 - `profit_factor`：PF；
 - `alpha`：策略收益减同次读取的 B&H，只在区间可比时有效；
 - `win_rate_confidence`：按胜率置信下界排序，降低极少交易的假高胜率。
@@ -137,6 +137,8 @@ node "$ENGINE" /tmp/strategy.pine \
 - `inject_proof.png`：恢复最终状态后的证据截图。
 
 若传入 `--chart-layout`，`run_manifest.json.stages.chart_layout` 会记录请求名称、实际布局、布局 ID、加载后的 symbol 与周期，供截图来源审计。
+
+`metrics.total_pnl` 与面板总损益保持同一口径，`closed_pnl / open_pnl` 单独保留已平仓与未平仓部分；`return_basis=total_equity` 才表示口径已确认。扫描行的兼容字段 `net_pnl` 使用同一总收益，不再代指已平仓收益。PF 仅来自已平仓交易。细节与旧数据处理见[收益口径排错](public-debugging.md#收益字段与面板不同)。最终源码哈希回读写入 `stages.source_readback`，失败会阻止完成报告。
 
 只有同时满足以下条件才可生成完成报告：
 

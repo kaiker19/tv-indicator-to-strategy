@@ -1,6 +1,13 @@
 const FLAT_FIELDS = Object.freeze([
   'currency',
   'total_pnl',
+  'closed_pnl',
+  'open_pnl',
+  'total_pnl_amount',
+  'closed_pnl_amount',
+  'open_pnl_amount',
+  'initial_capital',
+  'return_basis',
   'max_drawdown',
   'profit_factor',
   'total_trades',
@@ -25,7 +32,7 @@ function round6(value) {
 }
 
 function percentagePoints(value) {
-  return Number.isFinite(Number(value)) ? `${round6(Number(value) * 100)}%` : null;
+  return present(value) && Number.isFinite(Number(value)) ? `${round6(Number(value) * 100)}%` : null;
 }
 
 function put(output, key, value) {
@@ -46,7 +53,26 @@ export function normalizeStrategyMetrics(raw = {}) {
     : {};
 
   if (!present(output.currency)) put(output, 'currency', raw.currency);
-  if (!present(output.total_pnl)) put(output, 'total_pnl', percentagePoints(all.netProfitPercent));
+  if (raw.performance) {
+    put(output, 'closed_pnl', percentagePoints(all.netProfitPercent));
+    const capital = Number(raw.initial_capital);
+    const closed = present(all.netProfit) ? Number(all.netProfit) : NaN;
+    const open = present(performance.openPL) ? Number(performance.openPL) : NaN;
+    if (Number.isFinite(closed)) output.closed_pnl_amount = closed;
+    if (Number.isFinite(open)) output.open_pnl_amount = open;
+    if (!present(output.total_pnl)) {
+      // TV's openPLPercent uses a different denominator. Normalize the actual
+      // closed + open amounts against the live strategy's initial capital.
+      output.return_basis = 'unverified';
+      if (capital > 0 && Number.isFinite(capital) && Number.isFinite(closed) && Number.isFinite(open)) {
+        output.total_pnl_amount = round6(closed + open);
+        output.total_pnl = percentagePoints((closed + open) / capital);
+        output.closed_pnl = percentagePoints(closed / capital);
+        output.open_pnl = percentagePoints(open / capital);
+        output.return_basis = 'total_equity';
+      }
+    }
+  }
   if (!present(output.max_drawdown)) put(output, 'max_drawdown', percentagePoints(performance.maxStrategyDrawDownPercent));
   if (!present(output.profit_factor)) put(output, 'profit_factor', all.profitFactor);
   if (!present(output.total_trades)) put(output, 'total_trades', all.totalTrades);

@@ -5,6 +5,7 @@
  */
 import { evaluate, evaluateAsync, getClient } from '../connection.js';
 import { findPineApplyButtonExpression } from '../dialogs.mjs';
+import { openPanel } from './ui.js';
 
 // ── Monaco finder (injected into TV page) ──
 export const FIND_MONACO_EXPRESSION = `
@@ -47,8 +48,11 @@ const FIND_MONACO = FIND_MONACO_EXPRESSION;
  * Opens the Pine Editor panel and waits for Monaco to become available.
  * Returns true if editor is accessible, false on timeout.
  */
-export async function ensurePineEditorOpen() {
-  const already = await evaluate(`
+export async function ensurePineEditorOpen({ _deps = {} } = {}) {
+  const run = _deps.evaluate || evaluate;
+  const open = _deps.openPanel || openPanel;
+  const pause = _deps.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const already = await run(`
     (function() {
       var m = ${FIND_MONACO};
       return m !== null;
@@ -56,26 +60,13 @@ export async function ensurePineEditorOpen() {
   `);
   if (already) return true;
 
-  await evaluate(`
-    (function() {
-      var bwb = window.TradingView && window.TradingView.bottomWidgetBar;
-      if (!bwb) return;
-      if (typeof bwb.activateScriptEditorTab === 'function') bwb.activateScriptEditorTab();
-      else if (typeof bwb.showWidget === 'function') bwb.showWidget('pine-editor');
-    })()
-  `);
-
-  await evaluate(`
-    (function() {
-      var btn = document.querySelector('[aria-label="Pine"]')
-        || document.querySelector('[data-name="pine-dialog-button"]');
-      if (btn) btn.click();
-    })()
-  `);
+  // The panel API may already open the side editor. A subsequent blind click
+  // toggles it closed, making a healthy Monaco look unavailable.
+  await open({ panel: 'pine-editor', action: 'open' });
 
   for (let i = 0; i < 50; i++) {
-    await new Promise(r => setTimeout(r, 200));
-    const ready = await evaluate(`(function() { return ${FIND_MONACO} !== null; })()`);
+    await pause(200);
+    const ready = await run(`(function() { return (${FIND_MONACO}) !== null; })()`);
     if (ready) return true;
   }
   return false;

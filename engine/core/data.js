@@ -415,6 +415,16 @@ export async function getStrategyResults({ strategy_name, _deps } = {}) {
           if (perf && typeof perf.value === 'function') perf = perf.value();
           if (perf && typeof perf === 'object') { var pkeys = Object.keys(perf); for (var p = 0; p < pkeys.length; p++) { var pval = perf[pkeys[p]]; if (pval !== null && pval !== undefined && typeof pval !== 'function') metrics[pkeys[p]] = pval; } }
         }
+        // Read the configured initial capital, not the input default. It is
+        // required to align total return (closed + open P&L) with the UI.
+        if (metrics.performance && strat.metaInfo && strat.properties) {
+          var capitalInput = (strat.metaInfo().inputs || []).find(function(input) { return input.internalID === 'initial_capital'; });
+          if (capitalInput) {
+            var properties = strat.properties();
+            var inputState = properties.inputs ? properties.inputs.state() : properties.childs().inputs.state();
+            metrics.initial_capital = inputState[capitalInput.id];
+          }
+        }
         return {metrics: metrics, source: 'internal_api', strategy_name: targetName || sourceName(strat) || null};
       } catch(e) { return {metrics: {}, source: 'internal_api', error: e.message}; }
     })()

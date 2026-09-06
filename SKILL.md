@@ -67,6 +67,8 @@ ENGINE="$SKILL_DIR/engine/auto_inject.mjs"
 
 基线必须记录同一次运行的：源码身份、策略身份、symbol、timeframe、评估区间、成本、参数、策略收益、买入并持有、最大回撤、PF、交易数和 proof 状态。输入变化需要重新注入时，不得沿用旧结果。
 
+策略总收益使用含未平仓损益的 `total_pnl`，已平仓净收益另存 `closed_pnl`；当前运行检查 `return_basis=total_equity`。旧口径数据不能与新运行混排。动态改参失败、逐组重新编译完成时，应分别说明两条路径的状态，不宣称快速扫描通过。
+
 ### 4. 运行标准有界参数研究
 
 研究范围按 TradingView 执行预算决定，不按 Agent 工作量贴“轻度”或“深化”标签：

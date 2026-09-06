@@ -5,7 +5,7 @@ import { evaluate, safeString } from '../connection.js';
 
 const CHART_API = 'window.TradingViewApi._activeChartWidgetWV.value()';
 
-export async function setInputs({ entity_id, inputs: inputsRaw }) {
+export async function setInputs({ entity_id, inputs: inputsRaw, timeoutMs = 20_000, _deps = {} }) {
   const inputs = inputsRaw ? (typeof inputsRaw === 'string' ? JSON.parse(inputsRaw) : inputsRaw) : undefined;
   if (!entity_id) throw new Error('entity_id is required. Use chart_get_state to find study IDs.');
   if (!inputs || typeof inputs !== 'object' || Object.keys(inputs).length === 0) {
@@ -14,7 +14,9 @@ export async function setInputs({ entity_id, inputs: inputsRaw }) {
 
   const inputsJson = JSON.stringify(inputs);
 
-  const result = await evaluate(`
+  const run = _deps.evaluate || evaluate;
+  const timeout = Math.max(1, Math.min(60_000, Number(timeoutMs) || 20_000));
+  const result = await run(`
     (function() {
       var chart = ${CHART_API};
       var study = chart.getStudyById(${safeString(entity_id)});
@@ -25,30 +27,69 @@ export async function setInputs({ entity_id, inputs: inputsRaw }) {
       if (!currentInputs.length) {
         return { error: 'INPUT_UPDATE_REQUIRES_REINJECT: runtime input values unavailable for this strategy' };
       }
-      for (var i = 0; i < currentInputs.length; i++) {
-        if (overrides.hasOwnProperty(currentInputs[i].id)) {
-          currentInputs[i].value = overrides[currentInputs[i].id];
-          updatedKeys[currentInputs[i].id] = overrides[currentInputs[i].id];
+      var keys = Object.keys(overrides);
+      var invalid = keys.filter(function(key) {
+        return !/^in_\\d+$/.test(key) || !currentInputs.some(function(input) { return input.id === key; });
+      });
+      if (invalid.length) return { error: 'INPUT_UPDATE_MISMATCH: ' + invalid.join(',') };
+      var changed = keys.filter(function(key) {
+        return JSON.stringify(currentInputs.find(function(input) { return input.id === key; }).value) !== JSON.stringify(overrides[key]);
+      }).map(function(key) { return { id: key, value: overrides[key] }; });
+      function readInputs() {
+        var state = study.getInputValues();
+        var verified = {};
+        for (var key of keys) {
+          var input = state.find(function(item) { return item.id === key; });
+          if (!input || JSON.stringify(input.value) !== JSON.stringify(overrides[key])) return null;
+          verified[key] = input.value;
         }
+        return verified;
       }
-      study.setInputValues(currentInputs);
-      var verifiedState = study.properties().inputs.state();
-      var verifiedInputs = {};
-      var mismatched = [];
-      for (var updatedKey in updatedKeys) {
-        verifiedInputs[updatedKey] = verifiedState[updatedKey];
-        if (JSON.stringify(verifiedState[updatedKey]) !== JSON.stringify(updatedKeys[updatedKey])) mismatched.push(updatedKey);
+      function readReport() {
+        var source = study.study();
+        var report = typeof source.reportData === 'function' ? source.reportData() : source.reportData;
+        return report && typeof report.value === 'function' ? report.value() : report;
       }
-      if (mismatched.length || Object.keys(updatedKeys).length !== Object.keys(overrides).length) {
-        return { error: 'INPUT_UPDATE_MISMATCH: ' + (mismatched.length ? mismatched.join(',') : 'unmatched input id') };
-      }
-      return { updated_inputs: updatedKeys, verified_inputs: verifiedInputs, input_source: 'study_api' };
+      if (!changed.length && !study.isLoading()) return {
+        updated_inputs: overrides, verified_inputs: readInputs(), input_source: 'study_api_unchanged', recalculated: false
+      };
+      var before = readReport();
+      var loaded = study.onDataLoaded();
+      return new Promise(function(resolve) {
+        var completed = false, settled = false, timer;
+        function finish(result) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          loaded.unsubscribe(null, onLoaded);
+          resolve(result);
+        }
+        function onLoaded() { completed = true; }
+        function check() {
+          if (settled) return;
+          var verified = readInputs();
+          var report = readReport();
+          if (completed && !study.isLoading() && verified && (!before || (report && report !== before))) {
+            finish({ updated_inputs: overrides, verified_inputs: verified, input_source: 'study_api', recalculated: true });
+          } else setTimeout(check, 100);
+        }
+        loaded.subscribe(null, onLoaded);
+        timer = setTimeout(function() {
+          finish({ error: 'INPUT_UPDATE_REQUIRES_REINJECT: new inputs did not produce a verified completed report' });
+        }, ${timeout});
+        try {
+          // Never round-trip text/pineId/pineVersion: those are compiled-script
+          // identity fields, not user overrides, and can invalidate the study.
+          study.setInputValues(changed);
+          check();
+        } catch (error) { finish({ error: 'INPUT_UPDATE_REQUIRES_REINJECT: ' + error.message }); }
+      });
     })()
-  `);
+  `, { awaitPromise: true });
 
   if (result && result.error) throw new Error(result.error);
   return { success: true, entity_id, updated_inputs: result.updated_inputs,
-    verified_inputs: result.verified_inputs, input_source: result.input_source };
+    verified_inputs: result.verified_inputs, input_source: result.input_source, recalculated: result.recalculated };
 }
 
 export async function toggleVisibility({ entity_id, visible }) {

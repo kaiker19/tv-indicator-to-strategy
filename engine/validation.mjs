@@ -24,6 +24,8 @@ export function normalizeBenchmarkRow(row = {}) {
   const alpha = explicitAlpha != null ? explicitAlpha : (strategy != null && bh != null ? round2(strategy - bh) : null);
   const trades = pctOrNum(row.trades ?? row.total_trades);
   const pf = pctOrNum(row.pf ?? row.profit_factor);
+  const comparisonStatus = row.evaluation?.comparisonStatus || row.comparisonStatus || 'unverified';
+  const comparable = ['comparable', 'single_run'].includes(comparisonStatus) && !row.error;
   return {
     symbol: row.symbol ?? row.meta?.symbol ?? '(current)',
     strategy,
@@ -31,29 +33,30 @@ export function normalizeBenchmarkRow(row = {}) {
     alpha,
     trades,
     pf,
-    beatBh: alpha != null ? alpha > 0 : null,
+    beatBh: comparable && alpha != null ? alpha > 0 : null,
+    comparisonStatus,
     benchmarkSource: row.benchmarkSource ?? row.benchmark_source ?? null,
     error: row.error ?? null,
   };
 }
 
-export function summarizeValidationRows(rows = []) {
-  const normalized = rows.map(normalizeBenchmarkRow);
-  const valid = normalized.filter(r => r.alpha != null);
+export function summarizeValidationRows(rows = [], { evaluation } = {}) {
+  const normalized = rows.map(row => normalizeBenchmarkRow({ ...row, evaluation: row.evaluation || evaluation }));
+  const valid = normalized.filter(r => r.beatBh != null);
   const beat = valid.filter(r => r.alpha > 0).length;
   const total = normalized.length;
   const flags = [];
 
-  if (!total || !valid.length) flags.push('insufficient_validation');
-  if (total && beat === 0) flags.push('validation_0_of_n');
+  if (!total || valid.length < total) flags.push('insufficient_validation');
+  if (valid.length === total && total && beat === 0) flags.push('validation_0_of_n');
   if (normalized.some(r => r.trades != null && r.trades < 10)) flags.push('low_sample');
   if (normalized.some(r => r.pf != null && r.pf >= 20 && r.trades != null && r.trades < 10)) flags.push('extreme_pf_low_trades');
-  if (normalized.some(r => r.alpha != null && r.alpha < 0)) flags.push('negative_alpha');
+  if (valid.some(r => r.alpha < 0)) flags.push('negative_alpha');
   if (normalized.some(r => r.bh != null && !r.benchmarkSource)) flags.push('missing_benchmark_source');
 
   let verdict = { type: 'watch', label: '可继续观察', detail: '验证集中仍有可观察结果，但不能替代真实样本外。' };
   if (flags.includes('insufficient_validation')) {
-    verdict = { type: 'low_sample', label: '样本不足', detail: '验证数据不足，不能给出稳健结论。' };
+    verdict = { type: 'unverified', label: '基准比较待验证', detail: '部分市场缺少可比性证据，不统计为跑赢或未跑赢。' };
   } else if (flags.includes('low_sample') || flags.includes('extreme_pf_low_trades')) {
     verdict = { type: 'low_sample', label: '样本不足', detail: '交易笔数过少或 PF 异常偏高，结论需要降权。' };
   } else if (flags.includes('validation_0_of_n')) {
@@ -67,7 +70,9 @@ export function summarizeValidationRows(rows = []) {
     rows: normalized,
     beat,
     total,
-    beatBh: `${beat} / ${total}`,
+    verifiedTotal: valid.length,
+    beatBh: valid.length ? `${beat} / ${valid.length}` : null,
+    evaluation: evaluation || { comparisonStatus: 'unverified' },
     flags,
     verdict,
   };
@@ -90,8 +95,8 @@ export function buildTrustVerdict({ optimization = null, validation = null, oos 
   if (validation) {
     evidence.push({
       label: '验证结果',
-      value: `跑赢 ${validation.beatBh || `${validation.beat ?? 0} / ${validation.total ?? 0}`}`,
-      status: validation.beat === 0 ? 'fail' : validation.verdict?.type === 'low_sample' ? 'warn' : 'win',
+      value: validation.beatBh ? `跑赢 ${validation.beatBh}` : '基准比较待验证',
+      status: !validation.beatBh ? 'warn' : validation.beat === 0 ? 'fail' : validation.verdict?.type === 'low_sample' ? 'warn' : 'win',
     });
   }
   if (oos?.status) {

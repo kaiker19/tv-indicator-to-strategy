@@ -4,6 +4,16 @@ export function sourceDigest(source) {
   return createHash('sha256').update(source).digest('hex');
 }
 
+export function verifySourceReadback(expected, actual) {
+  // Monaco normalizes mixed CRLF/LF files. Ignore only line endings and our
+  // injected trailing run tag, never Pine whitespace, statements or defaults.
+  const normalize = value => String(value).replace(/\r\n/g, '\n');
+  const normalizedActual = normalize(actual).replace(/\n\n\/\/ AUTO_TAG: AUTO_\d+\n?$/, '');
+  const expectedDigest = sourceDigest(normalize(expected));
+  const actualDigest = sourceDigest(normalizedActual);
+  return { ok: expectedDigest === actualDigest, expectedDigest, actualDigest };
+}
+
 export function buildStudyRecord(name, source) {
   return { version: 1, name, sourceDigest: sourceDigest(source) };
 }
