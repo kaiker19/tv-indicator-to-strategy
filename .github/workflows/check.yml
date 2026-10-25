@@ -1,0 +1,26 @@
+name: Public skill checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: engine/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: engine
+      - run: npm test
+        working-directory: engine
+      - run: npm run check
+        working-directory: engine

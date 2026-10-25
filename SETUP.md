@@ -1,12 +1,14 @@
-# 自动注入回测 — 安装指南
+# 执行方式与自动回测安装
 
-只需一次，约 5 分钟。引擎自包含在本技能的 `engine/` 目录，**不需要单独装 tradingview-mcp / 配 MCP server**。
+仅做指标解释、源码审计或 Pine 转换，无需以下安装。Agent 自带 Computer Use 时，可直接完成界面导航、面板切换和截图。
 
-## 1. 装 TradingView Desktop（必须桌面版）
+批量回测、结构化读数和完成证明使用自包含的 `engine/`，不需要单独安装 tradingview-mcp 或配置 MCP server。以下步骤针对当前适配的 TradingView Desktop CDP 引擎。
+
+## 1. 装 TradingView Desktop
 
 https://www.tradingview.com/desktop/ → 装好 → 用账号登录一次（建议小号）。
 
-> ⚠️ 必须用**桌面版**。网页版无法被 CDP 注入。详细排错见 [references.md](references.md)。
+当前引擎适配桌面版；通过 Computer Use 操作网页版属于界面辅助，批量回测与结果采集仍按本指南配置。排错见 [public-debugging.md](public-debugging.md)。
 
 ## 2. 用调试端口启动
 

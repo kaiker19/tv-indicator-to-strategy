@@ -5,7 +5,13 @@ description: Use when a user provides a TradingView indicator, Pine source, indi
 
 # TradingView 指标转策略
 
-把用户感兴趣的指标研究清楚，转换成可审阅的 Pine strategy，再连接用户本机的 TradingView Desktop 获取真实 Strategy Tester 证据。所有收益、回撤、PF、交易数和截图都必须来自当前可审计运行，不能根据指标说明或本地推算编造。
+把用户感兴趣的指标研究清楚，转换成可审阅的 Pine strategy，再获取真实 Strategy Tester 证据。所有收益、回撤、PF、交易数和截图都必须来自当前可审计运行，不能根据指标说明或本地推算编造。
+
+## 选择执行方式
+
+- 只做解释、源码审计或 Pine 转换时，直接完成研究，不要求启动 TradingView、开放 CDP 或安装引擎依赖。
+- Agent 已有原生 Computer Use 时，用它完成界面导航、编辑器和面板切换、弹窗处理与截图；每次根据当前可见状态操作，避免照抄旧界面路径。没有该能力时继续使用随包引擎。
+- 批量改参、结构化绩效和最终完成证明继续使用 CDP 引擎。原生截图可辅助核对，不能代替同一运行的指标、参数、成本、区间和 proof 校验。
 
 执行前将本文件所在目录解析为绝对路径 `SKILL_DIR`，并设置：
 
@@ -59,7 +65,7 @@ ENGINE="$SKILL_DIR/engine/auto_inject.mjs"
 
 ### 3. 建立真实回测基线
 
-先按 [公开版运行手册](public-runbook.md) 运行探针，确认 TradingView Desktop、CDP、图表、Pine Editor 和 Strategy Tester 状态。首次安装在 `engine/` 运行 `bash install.sh`；环境设置见 [SETUP.md](SETUP.md)。
+按 [公开版运行手册](public-runbook.md) 运行探针，确认 TradingView Desktop、CDP、图表、Pine Editor 和 Strategy Tester 状态。有原生 Computer Use 时可先准备界面，再运行探针；首次使用引擎在 `engine/` 运行 `bash install.sh`，环境设置见 [SETUP.md](SETUP.md)。
 
 若本机保存了不含其他研究指标的专用图表布局，回测命令附加 `--chart-layout "<精确布局名>"`。布局属于用户设备，Skill 不预设名称；指定后必须精确命中并在注入前切换，找不到或存在未保存修改时就停止，不自动舍弃用户工作。没有专用布局时不删除用户内容，但 proof 截图前必须确认画面只包含目标策略、Strategy Tester 和必要价格图。
 
